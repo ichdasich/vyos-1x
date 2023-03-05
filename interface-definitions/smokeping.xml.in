@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<!-- Smokeping client configuration -->
+<interfaceDefinition>
+  <node name="service">
+    <children>
+      <node name="smokeping" owner="${vyos_conf_scripts_dir}/smokeping.py">
+        <properties>
+          <help>Smokeping client</help>
+          <priority>990</priority>
+        </properties>
+        <children>
+          <leafNode name="instrumentation_url">
+            <properties>
+              <help>URL of the smokeping instrumentation server</help>
+            </properties>
+          </leafNode>
+          <leafNode name="client_name">
+            <properties>
+              <help>Name of this client</help>
+            </properties>
+          </leafNode>
+          <leafNode name="client_secret">
+            <properties>
+              <help>Shared secret for this client</help>
+            </properties>
+          </leafNode>
+          #include <include/interface/vrf.xml.i>
+        </children>
+      </node>
+    </children>
+  </node>
+</interfaceDefinition>

@@ -183,6 +183,10 @@ Depends:
   wireless-regdb,
   wpasupplicant (>= 0.6.7),
   ndppd,
+  smokeping,
+  monitoring-plugins,
+  munin-node,
+  munin-plugins-extra,
   miniupnpd-nftables
 Description: VyOS configuration scripts and data
  VyOS configuration scripts, interface definitions, and everything

@@ -83,8 +83,8 @@ def generate(smokeping):
     if smokeping is None:
         return None
 
-    render(config_file, 'smokeping/default.j2', config)
-    render(secret_file, 'smokeping/clientsecrets.j2', config)
+    render(config_file, 'smokeping/default.j2', smokeping)
+    render(secret_file, 'smokeping/clientsecrets.j2', smokeping)
 
     # Smokeping is very particular about the secret file's permissions
     chmod_400(secret_file)

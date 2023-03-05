@@ -38,6 +38,7 @@ airbag.enable()
 
 config_file = r'/etc/default/smokeping'
 secret_file = r'/etc/smokeping/clientsecrets.conf'
+pathnm_file = r'/etc/smokeping/config.d/pathnames'
 
 def get_config(config=None):
     if config:
@@ -85,6 +86,10 @@ def generate(smokeping):
 
     render(config_file, 'smokeping/default.j2', smokeping)
     render(secret_file, 'smokeping/clientsecrets.j2', smokeping)
+
+    # Smokeping checks present of defined files; Sendmail is missing.
+    # Overwriting with /bin/true as it is unused in client mode anyway
+    render(pathnm_file, 'smokeping/pathnames.j2', smokeping)
 
     # Smokeping is very particular about the secret file's permissions
     chmod_400(secret_file)

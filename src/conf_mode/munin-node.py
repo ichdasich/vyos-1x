@@ -54,14 +54,14 @@ def get_config(config=None):
 
     munin_node = conf.get_config_dict(base, key_mangling=('-', '_'), get_first_key=True)
     # Node_name default is dynamic thus we can not use defaults()
-    if 'node-ame' not in munin_node:
-        munin_node['node-name'] = gethostname()
+    if 'node_name' not in munin_node:
+        munin_node['node_name'] = gethostname()
     # Do not know how to overwrite default from include
     if 'port' not in munin_node:
         munin_node['port'] = '4949'
 
     # Munin uses a regex to allow-list servers
-    munin_node['munin-server-regex'] = '^'+munin_node['munin-server'].replace('.','\.')+'$'
+    munin_node['munin_server_regex'] = '^'+munin_node['munin_server'].replace('.','\.')+'$'
 
     # We have gathered the dict representation of the CLI, but there are default
     # options which we need to update into the dictionary retrived.

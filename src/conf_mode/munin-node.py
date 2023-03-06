@@ -121,7 +121,7 @@ def generate(munin_node):
 
     for interface in interfaces():
         os.symlink('/usr/share/munin/plugins/if_','/etc/munin/plugins/if_'+interface)
-    os.symlink('/usr/share/munin/plugins/if_err_','retc/munin/plugins/if_err_'+interface)
+        os.symlink('/usr/share/munin/plugins/if_err_','/etc/munin/plugins/if_err_'+interface)
 
     # Create overwrite file
     if not os.path.isdir(systemd_override.replace('10-override.conf','')):

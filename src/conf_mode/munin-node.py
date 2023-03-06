@@ -52,31 +52,31 @@ def get_config(config=None):
     if not conf.exists(base):
         return None
 
-    munin-node = conf.get_config_dict(base, key_mangling=('-', '_'), get_first_key=True)
+    munin_node = conf.get_config_dict(base, key_mangling=('-', '_'), get_first_key=True)
     # Node_name default is dynamic thus we can not use defaults()
-    if 'node-ame' not in munin-node:
-        munin-node['node-name'] = gethostname()
+    if 'node-ame' not in munin_node:
+        munin_node['node-name'] = gethostname()
     # Do not know how to overwrite default from include
-    if 'port' not in munin-node:
-        munin-node['port'] = '4949'
+    if 'port' not in munin_node:
+        munin_node['port'] = '4949'
 
     # Munin uses a regex to allow-list servers
-    munin-node['munin-server-regex'] = '^'+munin-node['munin-server'].replace('.','\.')+'$'
+    munin_node['munin-server-regex'] = '^'+munin_node['munin-server'].replace('.','\.')+'$'
 
     # We have gathered the dict representation of the CLI, but there are default
     # options which we need to update into the dictionary retrived.
     default_values = defaults(base)
-    munin-node = dict_merge(default_values, munin-node)
-    return munin-node
+    munin_node = dict_merge(default_values, munin_node)
+    return munin_node
 
-def verify(munin-node):
+def verify(munin_node):
     # bail out early - looks like removal from running config
-    if not munin-node:
+    if not munin_node:
         return None
 
     return None
 
-def generate(munin-node):
+def generate(munin_node):
     # cleanup any available configuration file
     # files will be recreated on demand
     for i in glob(config_file + '*') + glob(plugin_path + '*'):
@@ -86,10 +86,10 @@ def generate(munin-node):
         os.unlink(systemd_override)
 
     # bail out early - looks like removal from running config
-    if munin-node is None:
+    if munin_node is None:
         return None
 
-    render(config_file, 'munin-node/munin-node.conf.j2', munin-node)
+    render(config_file, 'munin-node/munin-node.conf.j2', munin_node)
 
     # Create plugin symlinks
     os.symlink('/usr/share/munin/plugins/cpu','/etc/munin/plugins/cpu')
@@ -127,16 +127,16 @@ def generate(munin-node):
     if not os.path.isdir(systemd_override.replace('10-override.conf','')):
         os.makedirs(systemd_override.replace('10-override.conf',''))
 
-    render(systemd_override, 'munin-node/override.conf.j2', munin-node)
+    render(systemd_override, 'munin-node/override.conf.j2', munin_node)
 
     return None
 
-def apply(munin-node):
+def apply(munin_node):
     # stop all services first - then we will decide
     call('systemctl stop munin-node.service')
 
     # bail out early - e.g. service deletion
-    if munin-node is None:
+    if munin_node is None:
         return None
 
     call(f'systemctl restart munin-node.service')

@@ -19,18 +19,32 @@ import sys
 
 from vyos.template import is_ipv4
 
-pattern = '(.*):(.*):(.*)'
-
 if __name__ == '__main__':
+
     if len(sys.argv) != 2:
         sys.exit(1)
 
     value = sys.argv[1].split(':')
+
+    # entries with less than three blocks must be valid regex
     if not len(value) == 3:
-        sys.exit(1)
+        try:
+            re.compile(sys.argv[1])
+            sys.exit(0)
+        except re.error:
+            sys.exit(1)
+    # otherwise if all three blocks are digits, it is an exact match
+    elif (is_ipv4(value[0]) or value[0].isdigit()) \
+        and value[1].isdigit() \
+        and value[2].isdigit():
+        sys.exit(0)
+    # else, it has to be a valid regex.
+    else:
+        try:
+            re.compile(sys.argv[1])
+            sys.exit(0)
+        except re.error:
+            sys.exit(1)
 
-    if not (re.match(pattern, sys.argv[1]) and
-           (is_ipv4(value[0]) or value[0].isdigit()) and (value[1].isdigit() or value[1] == '*')):
-        sys.exit(1)
-
+    # default exit 1; should never be reached
     sys.exit(0)

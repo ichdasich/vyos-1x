@@ -26,6 +26,8 @@ from vyos.config import Config
 from vyos.configdict import dict_merge
 from vyos.configdict import node_changed
 from vyos.configdict import is_node_changed
+from vyos.configverify import verify_vrf
+from vyos.ifconfig import Interface
 from vyos.util import call
 from vyos.util import cmd
 from vyos.util import run
@@ -250,6 +252,8 @@ def verify(container):
             if v6_prefix > 1:
                 raise ConfigError(f'Only one IPv6 prefix can be defined for network "{network}"!')
 
+            # Verify VRF exists
+            verify_vrf(network_config)
 
     # A network attached to a container can not be deleted
     if {'network_remove', 'name'} <= set(container):
@@ -468,6 +472,20 @@ def apply(container):
 
     if disabled_new:
         call('systemctl daemon-reload')
+
+    # Start network and assign it to given VRF if requested. this can only be done
+    # after the containers got started as the podman network interface will
+    # only be enabled by the first container and yet I do not know how to enable
+    # the network interface in advance
+    if 'network' in container:
+        for network, network_config in container['network'].items():
+            network_name = f'podman-{network}'
+            # T5147: Networks are started only as soon as there is a consumer.
+            # If only a network is created in the first place, no need to assign
+            # it to a VRF as there's no consumer, yet.
+            if os.path.exists(f'/sys/class/net/{network_name}'):
+                tmp = Interface(network_name)
+                tmp.set_vrf(network_config.get('vrf', ''))
 
     return None
 

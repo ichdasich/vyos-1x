@@ -27,8 +27,8 @@ from vyos.configverify import verify_route_map
 from vyos.configverify import verify_interface_exists
 from vyos.configverify import verify_access_list
 from vyos.template import render_to_string
-from vyos.util import dict_search
-from vyos.util import get_interface_config
+from vyos.utils.dict import dict_search
+from vyos.utils.network import get_interface_config
 from vyos.xml import defaults
 from vyos import ConfigError
 from vyos import frr
@@ -88,6 +88,8 @@ def get_config(config=None):
         del default_values['area']['area_type']['nssa']
     if 'mpls_te' not in ospf:
         del default_values['mpls_te']
+    if 'graceful_restart' not in ospf:
+        del default_values['graceful_restart']
 
     for protocol in ['babel', 'bgp', 'connected', 'isis', 'kernel', 'rip', 'static', 'table']:
         # table is a tagNode thus we need to clean out all occurances for the
@@ -196,7 +198,7 @@ def verify(ospf):
                 vrf = ospf['vrf']
                 tmp = get_interface_config(interface)
                 if 'master' not in tmp or tmp['master'] != vrf:
-                    raise ConfigError(f'Interface {interface} is not a member of VRF {vrf}!')
+                    raise ConfigError(f'Interface "{interface}" is not a member of VRF "{vrf}"!')
 
     # Segment routing checks
     if dict_search('segment_routing.global_block', ospf):
@@ -250,30 +252,27 @@ def verify(ospf):
                     raise ConfigError(f'Segment routing prefix {prefix} cannot have both explicit-null '\
                                       f'and no-php-flag configured at the same time.')
 
+    # Check route summarisation
+    if 'summary_address' in ospf:
+        for prefix, prefix_options in ospf['summary_address'].items():
+            if {'tag', 'no_advertise'} <= set(prefix_options):
+                raise ConfigError(f'Can not set both "tag" and "no-advertise" for Type-5 '\
+                                  f'and Type-7 route summarisation of "{prefix}"!')
+
     return None
 
 def generate(ospf):
     if not ospf or 'deleted' in ospf:
         return None
 
-    ospf['protocol'] = 'ospf' # required for frr/vrf.route-map.frr.j2
-    ospf['frr_zebra_config'] = render_to_string('frr/vrf.route-map.frr.j2', ospf)
     ospf['frr_ospfd_config'] = render_to_string('frr/ospfd.frr.j2', ospf)
     return None
 
 def apply(ospf):
     ospf_daemon = 'ospfd'
-    zebra_daemon = 'zebra'
 
     # Save original configuration prior to starting any commit actions
     frr_cfg = frr.FRRConfig()
-
-    # The route-map used for the FIB (zebra) is part of the zebra daemon
-    frr_cfg.load_configuration(zebra_daemon)
-    frr_cfg.modify_section('(\s+)?ip protocol ospf route-map [-a-zA-Z0-9.]+', stop_pattern='(\s|!)')
-    if 'frr_zebra_config' in ospf:
-        frr_cfg.add_before(frr.default_add_before, ospf['frr_zebra_config'])
-    frr_cfg.commit_configuration(zebra_daemon)
 
     # Generate empty helper string which can be ammended to FRR commands, it
     # will be either empty (default VRF) or contain the "vrf <name" statement
@@ -292,6 +291,7 @@ def apply(ospf):
 
     if 'frr_ospfd_config' in ospf:
         frr_cfg.add_before(frr.default_add_before, ospf['frr_ospfd_config'])
+
     frr_cfg.commit_configuration(ospf_daemon)
 
     return None

@@ -16,7 +16,7 @@
 
 import unittest
 
-from vyos.util import read_file
+from vyos.utils.file import read_file
 from vyos.ifconfig import Interface
 from base_vyostest_shim import VyOSUnitTestSHIM
 
@@ -27,7 +27,6 @@ class InputInterfaceTest(VyOSUnitTestSHIM.TestCase):
     @classmethod
     def setUpClass(cls):
         super(InputInterfaceTest, cls).setUpClass()
-
         cls._interfaces = ['ifb10', 'ifb20', 'ifb30']
 
     def tearDown(self):

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2020-2022 VyOS maintainers and contributors
+# Copyright (C) 2020-2023 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -20,13 +20,15 @@ from sys import argv
 from vyos.base import Warning
 from vyos.config import Config
 from vyos.configdict import dict_merge
+from vyos.configdict import node_changed
 from vyos.configverify import verify_prefix_list
 from vyos.configverify import verify_route_map
 from vyos.configverify import verify_vrf
 from vyos.template import is_ip
 from vyos.template import is_interface
 from vyos.template import render_to_string
-from vyos.util import dict_search
+from vyos.utils.dict import dict_search
+from vyos.utils.network import get_interface_vrf
 from vyos.validate import is_addr_assigned
 from vyos import ConfigError
 from vyos import frr
@@ -50,15 +52,29 @@ def get_config(config=None):
     bgp = conf.get_config_dict(base, key_mangling=('-', '_'),
                                get_first_key=True, no_tag_node_value_mangle=True)
 
-    # Assign the name of our VRF context. This MUST be done before the return
-    # statement below, else on deletion we will delete the default instance
-    # instead of the VRF instance.
-    if vrf: bgp.update({'vrf' : vrf})
-
     bgp['dependent_vrfs'] = conf.get_config_dict(['vrf', 'name'],
                                                  key_mangling=('-', '_'),
                                                  get_first_key=True,
                                                  no_tag_node_value_mangle=True)
+
+    # Remove per interface MPLS configuration - get a list if changed
+    # nodes under the interface tagNode
+    interfaces_removed = node_changed(conf, base + ['interface'])
+    if interfaces_removed:
+        bgp['interface_removed'] = list(interfaces_removed)
+
+    # Assign the name of our VRF context. This MUST be done before the return
+    # statement below, else on deletion we will delete the default instance
+    # instead of the VRF instance.
+    if vrf:
+        bgp.update({'vrf' : vrf})
+        # We can not delete the BGP VRF instance if there is a L3VNI configured
+        tmp = ['vrf', 'name', vrf, 'vni']
+        if conf.exists(tmp):
+            bgp.update({'vni' : conf.return_value(tmp)})
+        # We can safely delete ourself from the dependent vrf list
+        if vrf in bgp['dependent_vrfs']:
+            del bgp['dependent_vrfs'][vrf]
 
     bgp['dependent_vrfs'].update({'default': {'protocols': {
         'bgp': conf.get_config_dict(base_path, key_mangling=('-', '_'),
@@ -187,14 +203,21 @@ def verify_remote_as(peer_config, bgp_config):
     return None
 
 def verify_afi(peer_config, bgp_config):
+    # If address_family configured under neighboor
     if 'address_family' in peer_config:
         return True
 
+    # If address_family configured under peer-group
+    # if neighbor interface configured
+    peer_group_name = ''
+    if dict_search('interface.peer_group', peer_config):
+        peer_group_name = peer_config['interface']['peer_group']
+    # if neighbor IP configured.
     if 'peer_group' in peer_config:
         peer_group_name = peer_config['peer_group']
+    if peer_group_name:
         tmp = dict_search(f'peer_group.{peer_group_name}.address_family', bgp_config)
         if tmp: return True
-
     return False
 
 def verify(bgp):
@@ -202,9 +225,13 @@ def verify(bgp):
         if 'vrf' in bgp:
             # Cannot delete vrf if it exists in import vrf list in other vrfs
             for tmp_afi in ['ipv4_unicast', 'ipv6_unicast']:
-                if verify_vrf_as_import(bgp['vrf'],tmp_afi,bgp['dependent_vrfs']):
-                    raise ConfigError(f'Cannot delete vrf {bgp["vrf"]} instance, ' \
-                                      'Please unconfigure import vrf commands!')
+                if verify_vrf_as_import(bgp['vrf'], tmp_afi, bgp['dependent_vrfs']):
+                    raise ConfigError(f'Cannot delete VRF instance "{bgp["vrf"]}", ' \
+                                      'unconfigure "import vrf" commands!')
+            # We can not delete the BGP instance if a L3VNI instance exists
+            if 'vni' in bgp:
+                raise ConfigError(f'Cannot delete VRF instance "{bgp["vrf"]}", ' \
+                                  f'unconfigure VNI "{bgp["vni"]}" first!')
         else:
             # We are running in the default VRF context, thus we can not delete
             # our main BGP instance if there are dependent BGP VRF instances.
@@ -218,6 +245,18 @@ def verify(bgp):
 
     if 'system_as' not in bgp:
         raise ConfigError('BGP system-as number must be defined!')
+
+    # Verify vrf on interface and bgp section
+    if 'interface' in bgp:
+        for interface in bgp['interface']:
+            error_msg = f'Interface "{interface}" belongs to different VRF instance'
+            tmp = get_interface_vrf(interface)
+            if 'vrf' in bgp:
+                if bgp['vrf'] != tmp:
+                    vrf = bgp['vrf']
+                    raise ConfigError(f'{error_msg} "{vrf}"!')
+            elif tmp != 'default':
+                raise ConfigError(f'{error_msg} "{tmp}"!')
 
     # Common verification for both peer-group and neighbor statements
     for neighbor in ['neighbor', 'peer_group']:
@@ -429,7 +468,6 @@ def verify(bgp):
                                          f'{afi} administrative distance {key}!')
 
             if afi in ['ipv4_unicast', 'ipv6_unicast']:
-
                 vrf_name = bgp['vrf'] if dict_search('vrf', bgp) else 'default'
                 # Verify if currant VRF contains rd and route-target options
                 # and does not exist in import list in other VRFs
@@ -437,6 +475,8 @@ def verify(bgp):
                     if verify_vrf_as_import(vrf_name, afi, bgp['dependent_vrfs']):
                         raise ConfigError(
                             'Command "import vrf" conflicts with "rd vpn export" command!')
+                    if not dict_search('parameters.router_id', bgp):
+                        Warning(f'BGP "router-id" is required when using "rd" and "route-target"!')
 
                 if dict_search('route_target.vpn.both', afi_config):
                     if verify_vrf_as_import(vrf_name, afi, bgp['dependent_vrfs']):
@@ -478,31 +518,29 @@ def verify(bgp):
                     tmp = dict_search(f'route_map.vpn.{export_import}', afi_config)
                     if tmp: verify_route_map(tmp, bgp)
 
+            # Checks only required for L2VPN EVPN
+            if afi in ['l2vpn_evpn']:
+                if 'vni' in afi_config:
+                    for vni, vni_config in afi_config['vni'].items():
+                        if 'rd' in vni_config and 'advertise_all_vni' not in afi_config:
+                            raise ConfigError('BGP EVPN "rd" requires "advertise-all-vni" to be set!')
+                        if 'route_target' in vni_config and 'advertise_all_vni' not in afi_config:
+                            raise ConfigError('BGP EVPN "route-target" requires "advertise-all-vni" to be set!')
+
     return None
 
 def generate(bgp):
     if not bgp or 'deleted' in bgp:
         return None
 
-    bgp['protocol'] = 'bgp' # required for frr/vrf.route-map.frr.j2
-    bgp['frr_zebra_config'] = render_to_string('frr/vrf.route-map.frr.j2', bgp)
     bgp['frr_bgpd_config']  = render_to_string('frr/bgpd.frr.j2', bgp)
-
     return None
 
 def apply(bgp):
     bgp_daemon = 'bgpd'
-    zebra_daemon = 'zebra'
 
     # Save original configuration prior to starting any commit actions
     frr_cfg = frr.FRRConfig()
-
-    # The route-map used for the FIB (zebra) is part of the zebra daemon
-    frr_cfg.load_configuration(zebra_daemon)
-    frr_cfg.modify_section(r'(\s+)?ip protocol bgp route-map [-a-zA-Z0-9.]+', stop_pattern='(\s|!)')
-    if 'frr_zebra_config' in bgp:
-        frr_cfg.add_before(frr.default_add_before, bgp['frr_zebra_config'])
-    frr_cfg.commit_configuration(zebra_daemon)
 
     # Generate empty helper string which can be ammended to FRR commands, it
     # will be either empty (default VRF) or contain the "vrf <name" statement
@@ -511,6 +549,14 @@ def apply(bgp):
         vrf = ' vrf ' + bgp['vrf']
 
     frr_cfg.load_configuration(bgp_daemon)
+
+    # Remove interface specific config
+    for key in ['interface', 'interface_removed']:
+        if key not in bgp:
+            continue
+        for interface in bgp[key]:
+            frr_cfg.modify_section(f'^interface {interface}', stop_pattern='^exit', remove_stop_mark=True)
+
     frr_cfg.modify_section(f'^router bgp \d+{vrf}', stop_pattern='^exit', remove_stop_mark=True)
     if 'frr_bgpd_config' in bgp:
         frr_cfg.add_before(frr.default_add_before, bgp['frr_bgpd_config'])

@@ -40,10 +40,10 @@ from vyos.template import is_ipv4
 from vyos.template import is_ipv6
 from vyos.template import render
 from vyos.validate import is_ipv6_link_local
-from vyos.util import call
-from vyos.util import dict_search
-from vyos.util import dict_search_args
-from vyos.util import run
+from vyos.utils.dict import dict_search
+from vyos.utils.dict import dict_search_args
+from vyos.utils.process import call
+from vyos.utils.process import run
 from vyos.xml import defaults
 from vyos import ConfigError
 from vyos import airbag
@@ -455,7 +455,7 @@ def verify(ipsec):
 
                 if dict_search('options.disable_route_autoinstall',
                                ipsec) == None:
-                    Warning('It\'s recommended to use ipsec vty with the next command\n[set vpn ipsec option disable-route-autoinstall]')
+                    Warning('It\'s recommended to use ipsec vti with the next command\n[set vpn ipsec option disable-route-autoinstall]')
 
                 if 'bind' in peer_conf['vti']:
                     vti_interface = peer_conf['vti']['bind']

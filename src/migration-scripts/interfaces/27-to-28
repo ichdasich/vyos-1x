@@ -37,7 +37,6 @@ if not config.exists(base):
     exit(0)
 
 for ifname in config.list_nodes(base):
-    print(ifname)
     multicast_base = base + [ifname, 'multicast']
     if config.exists(multicast_base):
         tmp = config.return_value(multicast_base)

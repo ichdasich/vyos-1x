@@ -22,7 +22,7 @@ from base_vyostest_shim import VyOSUnitTestSHIM
 
 from vyos.configsession import ConfigSessionError
 from vyos.ifconfig import Section
-from vyos.util import cmd
+from vyos.utils.process import cmd
 
 base_path = ['qos']
 
@@ -544,4 +544,4 @@ class TestQoS(VyOSUnitTestSHIM.TestCase):
                         self.assertEqual(f'{dport:x}', filter['options']['match']['value'])
 
 if __name__ == '__main__':
-    unittest.main(verbosity=2, failfast=True)
+    unittest.main(verbosity=2)

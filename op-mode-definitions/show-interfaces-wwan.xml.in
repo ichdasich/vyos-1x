@@ -12,7 +12,7 @@
                 <script>cd /sys/class/net; ls -d wwan*</script>
               </completionHelp>
             </properties>
-            <command>${vyos_op_scripts_dir}/interfaces.py show --intf_name="$4" --intf_type=wirelessmodem</command>
+            <command>${vyos_op_scripts_dir}/interfaces.py show --intf-name="$4" --intf-type=wirelessmodem</command>
             <children>
               <leafNode name="capabilities">
                 <properties>
@@ -72,7 +72,7 @@
                 <properties>
                   <help>Show WWAN module detailed information summary</help>
                 </properties>
-                <command>mmcli --modem ${4#wwan}</command>
+                <command>if cli-shell-api existsActive interfaces wwan $4; then mmcli --modem ${4#wwan}; else echo "Interface \"$4\" unconfigured!"; fi</command>
               </leafNode>
               <leafNode name="log">
                 <properties>
@@ -86,13 +86,13 @@
             <properties>
               <help>Show Wireless Modem (WWAN) interface information</help>
             </properties>
-            <command>${vyos_op_scripts_dir}/interfaces.py show_summary --intf_type=wirelessmodem</command>
+            <command>${vyos_op_scripts_dir}/interfaces.py show_summary --intf-type=wwan</command>
             <children>
               <leafNode name="detail">
                 <properties>
                   <help>Show detailed Wireless Modem (WWAN( interface information</help>
                 </properties>
-                <command>${vyos_op_scripts_dir}/interfaces.py show --intf_type=wirelessmodem</command>
+                <command>${vyos_op_scripts_dir}/interfaces.py show --intf-type=wwan</command>
               </leafNode>
             </children>
           </node>

@@ -19,8 +19,8 @@ import re
 import tabulate
 
 from vyos.config import Config
-from vyos.util import cmd
-from vyos.util import dict_search_args
+from vyos.utils.process import cmd
+from vyos.utils.dict import dict_search_args
 
 def get_config_policy(conf, name=None, ipv6=False):
     config_path = ['policy']
@@ -61,8 +61,10 @@ def output_policy_route(name, route_conf, ipv6=False, single_rule_id=None):
     ip_str = 'IPv6' if ipv6 else 'IPv4'
     print(f'\n---------------------------------\n{ip_str} Policy Route "{name}"\n')
 
-    if route_conf['interface']:
+    if route_conf.get('interface'):
         print('Active on: {0}\n'.format(" ".join(route_conf['interface'])))
+    else:
+        print('Inactive - Not applied to any interfaces\n')
 
     details = get_nftables_details(name, ipv6)
     rows = []

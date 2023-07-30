@@ -18,7 +18,7 @@ import os
 import sys
 import socket
 import ipaddress
-from vyos.util import get_all_vrfs
+from vyos.utils.network import get_all_vrfs
 from vyos.ifconfig import Section
 
 
@@ -89,6 +89,16 @@ options = {
         'ping': '{command} -i {value}',
         'type': '<seconds>',
         'help': 'Number of seconds to wait between requests'
+    },
+    'ipv4': {
+        'ping': '{command} -4',
+        'type': 'noarg',
+        'help': 'Use IPv4 only'
+    },
+    'ipv6': {
+        'ping': '{command} -6',
+        'type': 'noarg',
+        'help': 'Use IPv6 only'
     },
     'mark': {
         'ping': '{command} -m {value}',

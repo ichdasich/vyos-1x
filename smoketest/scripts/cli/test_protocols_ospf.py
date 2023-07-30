@@ -20,7 +20,7 @@ from base_vyostest_shim import VyOSUnitTestSHIM
 
 from vyos.configsession import ConfigSessionError
 from vyos.ifconfig import Section
-from vyos.util import process_named_running
+from vyos.utils.process import process_named_running
 
 PROCESS_NAME = 'ospfd'
 base_path = ['protocols', 'ospf']
@@ -159,6 +159,12 @@ class TestProtocolsOSPF(VyOSUnitTestSHIM.TestCase):
         on_startup = '30'
         on_shutdown = '60'
         refresh = '50'
+        aggregation_timer = '100'
+        summary_nets = {
+            '10.0.1.0/24' : {},
+            '10.0.2.0/24' : {'tag' : '50'},
+            '10.0.3.0/24' : {'no_advertise' : {}},
+         }
 
         self.cli_set(base_path + ['distance', 'global', global_distance])
         self.cli_set(base_path + ['distance', 'ospf', 'external', external])
@@ -169,6 +175,15 @@ class TestProtocolsOSPF(VyOSUnitTestSHIM.TestCase):
 
         self.cli_set(base_path + ['mpls-te', 'enable'])
         self.cli_set(base_path + ['refresh', 'timers', refresh])
+
+        self.cli_set(base_path + ['aggregation', 'timer', aggregation_timer])
+
+        for summary, summary_options in summary_nets.items():
+            self.cli_set(base_path + ['summary-address', summary])
+            if 'tag' in summary_options:
+                self.cli_set(base_path + ['summary-address', summary, 'tag', summary_options['tag']])
+            if 'no_advertise' in summary_options:
+                self.cli_set(base_path + ['summary-address', summary, 'no-advertise'])
 
         # commit changes
         self.cli_commit()
@@ -184,6 +199,14 @@ class TestProtocolsOSPF(VyOSUnitTestSHIM.TestCase):
         self.assertIn(f' max-metric router-lsa on-shutdown {on_shutdown}', frrconfig)
         self.assertIn(f' refresh timer {refresh}', frrconfig)
 
+        self.assertIn(f' aggregation timer {aggregation_timer}', frrconfig)
+        for summary, summary_options in summary_nets.items():
+            self.assertIn(f' summary-address {summary}', frrconfig)
+            if 'tag' in summary_options:
+                tag = summary_options['tag']
+                self.assertIn(f' summary-address {summary} tag {tag}', frrconfig)
+            if 'no_advertise' in summary_options:
+                self.assertIn(f' summary-address {summary} no-advertise', frrconfig)
 
         # enable inter-area
         self.cli_set(base_path + ['distance', 'ospf', 'inter-area', inter_area])
@@ -300,26 +323,6 @@ class TestProtocolsOSPF(VyOSUnitTestSHIM.TestCase):
             self.assertIn(f' no ip ospf passive', config)
             self.assertIn(f' bandwidth {bandwidth}', config)
 
-    def test_ospf_10_zebra_route_map(self):
-        # Implemented because of T3328
-        self.cli_set(base_path + ['route-map', route_map])
-        # commit changes
-        self.cli_commit()
-
-        # Verify FRR configuration
-        zebra_route_map = f'ip protocol ospf route-map {route_map}'
-        frrconfig = self.getFRRconfig(zebra_route_map)
-        self.assertIn(zebra_route_map, frrconfig)
-
-        # Remove the route-map again
-        self.cli_delete(base_path + ['route-map'])
-        # commit changes
-        self.cli_commit()
-
-        # Verify FRR configuration
-        frrconfig = self.getFRRconfig(zebra_route_map)
-        self.assertNotIn(zebra_route_map, frrconfig)
-
     def test_ospf_11_interface_area(self):
         area = '0'
         interfaces = Section.interfaces('ethernet')
@@ -434,6 +437,74 @@ class TestProtocolsOSPF(VyOSUnitTestSHIM.TestCase):
         self.assertIn(f' segment-routing prefix {prefix_one} index {prefix_one_value} explicit-null', frrconfig)
         self.assertIn(f' segment-routing prefix {prefix_two} index {prefix_two_value} no-php-flag', frrconfig)
 
+    def test_ospf_15_ldp_sync(self):
+        holddown = "500"
+        interface = 'lo'
+        interfaces = Section.interfaces('ethernet')
+
+        self.cli_set(base_path + ['interface', interface])
+        self.cli_set(base_path + ['ldp-sync', 'holddown', holddown])
+
+        # Commit main OSPF changes
+        self.cli_commit()
+
+        # Verify main OSPF changes
+        frrconfig = self.getFRRconfig('router ospf')
+        self.assertIn(f'router ospf', frrconfig)
+        self.assertIn(f' timers throttle spf 200 1000 10000', frrconfig)
+        self.assertIn(f' mpls ldp-sync holddown {holddown}', frrconfig)
+
+        for interface in interfaces:
+            self.cli_set(base_path + ['interface', interface, 'ldp-sync', 'holddown', holddown])
+
+            # Commit interface changes for holddown
+            self.cli_commit()
+
+            # Verify interface changes for holddown
+            config = self.getFRRconfig(f'interface {interface}')
+            self.assertIn(f'interface {interface}', config)
+            self.assertIn(f' ip ospf dead-interval 40', config)
+            self.assertIn(f' ip ospf mpls ldp-sync', config)
+            self.assertIn(f' ip ospf mpls ldp-sync holddown {holddown}', config)
+
+        for interface in interfaces:
+            self.cli_set(base_path + ['interface', interface, 'ldp-sync', 'disable'])
+
+            # Commit interface changes for disable
+            self.cli_commit()
+
+            # Verify interface changes for disable
+            config = self.getFRRconfig(f'interface {interface}')
+            self.assertIn(f'interface {interface}', config)
+            self.assertIn(f' ip ospf dead-interval 40', config)
+            self.assertIn(f' no ip ospf mpls ldp-sync', config)
+
+    def test_ospf_16_graceful_restart(self):
+        period = '300'
+        supported_grace_time = '400'
+        router_ids = ['192.0.2.1', '192.0.2.2']
+
+        self.cli_set(base_path + ['capability', 'opaque'])
+        self.cli_set(base_path + ['graceful-restart', 'grace-period', period])
+        self.cli_set(base_path + ['graceful-restart', 'helper', 'planned-only'])
+        self.cli_set(base_path + ['graceful-restart', 'helper', 'no-strict-lsa-checking'])
+        self.cli_set(base_path + ['graceful-restart', 'helper', 'supported-grace-time', supported_grace_time])
+        for router_id in router_ids:
+            self.cli_set(base_path + ['graceful-restart', 'helper', 'enable', 'router-id', router_id])
+
+        # commit changes
+        self.cli_commit()
+
+        # Verify FRR ospfd configuration
+        frrconfig = self.getFRRconfig('router ospf')
+        self.assertIn(f'router ospf', frrconfig)
+        self.assertIn(f' capability opaque', frrconfig)
+        self.assertIn(f' graceful-restart grace-period {period}', frrconfig)
+        self.assertIn(f' graceful-restart helper planned-only', frrconfig)
+        self.assertIn(f' no graceful-restart helper strict-lsa-checking', frrconfig)
+        self.assertIn(f' graceful-restart helper supported-grace-time {supported_grace_time}', frrconfig)
+        for router_id in router_ids:
+            self.assertIn(f' graceful-restart helper enable {router_id}', frrconfig)
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

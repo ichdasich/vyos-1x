@@ -32,12 +32,12 @@ from vyos.configdict import list_diff
 from vyos.configdict import dict_merge
 from vyos.configdict import get_vlan_ids
 from vyos.template import render
-from vyos.util import mac2eui64
-from vyos.util import dict_search
-from vyos.util import read_file
-from vyos.util import get_interface_config
-from vyos.util import get_interface_namespace
-from vyos.util import is_systemd_service_active
+from vyos.utils.network import mac2eui64
+from vyos.utils.dict import dict_search
+from vyos.utils.file import read_file
+from vyos.utils.network import get_interface_config
+from vyos.utils.network import get_interface_namespace
+from vyos.utils.process import is_systemd_service_active
 from vyos.template import is_ipv4
 from vyos.template import is_ipv6
 from vyos.validate import is_intf_addr_assigned
@@ -56,6 +56,8 @@ from vyos.ifconfig import Section
 
 from netaddr import EUI
 from netaddr import mac_unix_expanded
+
+link_local_prefix = 'fe80::/64'
 
 class Interface(Control):
     # This is the class which will be used to create
@@ -1353,34 +1355,6 @@ class Interface(Control):
                                  f'egress redirect dev {target_if}')
             if err: print('tc filter add for redirect failed')
 
-    def set_xdp(self, state):
-        """
-        Enable Kernel XDP support. State can be either True or False.
-
-        Example:
-        >>> from vyos.ifconfig import Interface
-        >>> i = Interface('eth0')
-        >>> i.set_xdp(True)
-        """
-        if not isinstance(state, bool):
-            raise ValueError("Value out of range")
-
-        # https://vyos.dev/T3448 - there is (yet) no RPI support for XDP
-        if not os.path.exists('/usr/sbin/xdp_loader'):
-            return
-
-        ifname = self.config['ifname']
-        cmd = f'xdp_loader -d {ifname} -U --auto-mode'
-        if state:
-            # Using 'xdp' will automatically decide if the driver supports
-            # 'xdpdrv' or only 'xdpgeneric'. A user later sees which driver is
-            # actually in use by calling 'ip a' or 'show interfaces ethernet'
-            cmd = f'xdp_loader -d {ifname} --auto-mode -F --progsec xdp_router ' \
-                  f'--filename /usr/share/vyos/xdp/xdp_prog_kern.o && ' \
-                  f'xdp_prog_user -d {ifname}'
-
-        return self._cmd(cmd)
-
     def update(self, config):
         """ General helper function which works on a dictionary retrived by
         get_config_dict(). It's main intention is to consolidate the scattered
@@ -1444,7 +1418,7 @@ class Interface(Control):
                 # we will delete all interface specific IP addresses if they are not
                 # explicitly configured on the CLI
                 if is_ipv6_link_local(addr):
-                    eui64 = mac2eui64(self.get_mac(), 'fe80::/64')
+                    eui64 = mac2eui64(self.get_mac(), link_local_prefix)
                     if addr != f'{eui64}/64':
                         self.del_addr(addr)
                 else:
@@ -1571,9 +1545,9 @@ class Interface(Control):
 
         # Manage IPv6 link-local addresses
         if dict_search('ipv6.address.no_default_link_local', config) != None:
-            self.del_ipv6_eui64_address('fe80::/64')
+            self.del_ipv6_eui64_address(link_local_prefix)
         else:
-            self.add_ipv6_eui64_address('fe80::/64')
+            self.add_ipv6_eui64_address(link_local_prefix)
 
         # Add IPv6 EUI-based addresses
         tmp = dict_search('ipv6.address.eui64', config)
@@ -1585,9 +1559,6 @@ class Interface(Control):
         if 'is_bridge_member' in config:
             tmp = config.get('is_bridge_member')
             self.add_to_bridge(tmp)
-
-        # eXpress Data Path - highly experimental
-        self.set_xdp('xdp' in config)
 
         # configure interface mirror or redirection target
         self.set_mirror_redirect()
@@ -1708,6 +1679,14 @@ class VLANIf(Interface):
         # bail out early if interface already exists
         if self.exists(f'{self.ifname}'):
             return
+
+        # If source_interface or vlan_id was not explicitly defined (e.g. when
+        # calling  VLANIf('eth0.1').remove() we can define source_interface and
+        # vlan_id here, as it's quiet obvious that it would be eth0 in that case.
+        if 'source_interface' not in self.config:
+            self.config['source_interface'] = '.'.join(self.ifname.split('.')[:-1])
+        if 'vlan_id' not in self.config:
+            self.config['vlan_id'] = self.ifname.split('.')[-1]
 
         cmd = 'ip link add link {source_interface} name {ifname} type vlan id {vlan_id}'
         if 'protocol' in self.config:

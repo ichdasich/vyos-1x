@@ -48,6 +48,9 @@ push "redirect-gateway def1"
 {% if use_lzo_compression is vyos_defined %}
 compress lzo
 {% endif %}
+{% if offload.dco is not vyos_defined %}
+disable-dco
+{% endif %}
 
 {% if mode is vyos_defined('client') %}
 #
@@ -98,7 +101,7 @@ server-ipv6 {{ subnet }}
 {%         endif %}
 
 {%         if server.client_ip_pool is vyos_defined and server.client_ip_pool.disable is not vyos_defined %}
-ifconfig-pool {{ server.client_ip_pool.start }} {{ server.client_ip_pool.stop }}{{ server.client_ip_pool.subnet_mask if server.client_ip_pool.subnet_mask is vyos_defined }}
+ifconfig-pool {{ server.client_ip_pool.start }} {{ server.client_ip_pool.stop }} {{ server.client_ip_pool.subnet_mask if server.client_ip_pool.subnet_mask is vyos_defined }}
 {%         endif %}
 {%         if server.max_connections is vyos_defined %}
 max-clients {{ server.max_connections }}

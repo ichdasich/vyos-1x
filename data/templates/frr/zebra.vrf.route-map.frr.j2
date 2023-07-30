@@ -1,0 +1,28 @@
+!
+{% if name is vyos_defined %}
+{%     for vrf, vrf_config in name.items() %}
+{#         code path required for vrf_vni.py as we will only render the required VR configuration and not all of them #}
+{%         if only_vrf is vyos_defined and vrf is not vyos_defined(only_vrf) %}
+{%             continue %}
+{%         endif %}
+vrf {{ vrf }}
+{%         if vrf_config.ip.protocol is vyos_defined %}
+{%             for protocol_name, protocol_config in vrf_config.ip.protocol.items() %}
+ ip protocol {{ protocol_name }} route-map {{ protocol_config.route_map }}
+{%             endfor %}
+{%         endif %}
+{%         if vrf_config.ipv6.protocol is vyos_defined %}
+{%             for protocol_name, protocol_config in vrf_config.ipv6.protocol.items() %}
+{%                 if protocol_name is vyos_defined('ospfv3') %}
+{%                     set protocol_name = 'ospf6' %}
+{%                 endif %}
+ ipv6 protocol {{ protocol_name }} route-map {{ protocol_config.route_map }}
+{%             endfor %}
+{%         endif %}
+{%         if vrf_config.vni is vyos_defined and no_vni is not vyos_defined %}
+ vni {{ vrf_config.vni }}
+{%         endif %}
+exit-vrf
+{%     endfor %}
+!
+{% endif %}

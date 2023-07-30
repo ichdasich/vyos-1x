@@ -21,14 +21,15 @@ from ipaddress import ip_interface
 from ipaddress import IPv4Interface
 from ipaddress import IPv6Interface
 
+from vyos.base import Warning
 from vyos.config import Config
 from vyos.configdict import dict_merge
 from vyos.ifconfig.vrrp import VRRP
 from vyos.template import render
 from vyos.template import is_ipv4
 from vyos.template import is_ipv6
-from vyos.util import call
-from vyos.util import dict_search
+from vyos.utils.process import call
+from vyos.utils.dict import dict_search
 from vyos.xml import defaults
 from vyos import ConfigError
 from vyos import airbag
@@ -86,7 +87,7 @@ def get_config(config=None):
     return ha
 
 def verify(ha):
-    if not ha:
+    if not ha or 'disable' in ha:
         return None
 
     used_vrid_if = []
@@ -105,6 +106,18 @@ def verify(ha):
             if 'authentication' in group_config:
                 if not {'password', 'type'} <= set(group_config['authentication']):
                     raise ConfigError(f'Authentication requires both type and passwortd to be set in VRRP group "{group}"')
+
+            if 'health_check' in group_config:
+                health_check_types = ["script", "ping"]
+                from vyos.utils.dict import check_mutually_exclusive_options
+                try:
+                    check_mutually_exclusive_options(group_config["health_check"], health_check_types, required=True)
+                except ValueError as e:
+                    Warning(f'Health check configuration for VRRP group "{group}" will remain unused ' \
+                            f'until it has one of the following options: {health_check_types}')
+                    # XXX: health check has default options so we need to remove it
+                    # to avoid generating useless config statements in keepalived.conf
+                    del group_config["health_check"]
 
             # Keepalived doesn't allow mixing IPv4 and IPv6 in one group, so we mirror that restriction
             # We also need to make sure VRID is not used twice on the same interface with the
@@ -162,6 +175,11 @@ def verify(ha):
     # Virtual-server
     if 'virtual_server' in ha:
         for vs, vs_config in ha['virtual_server'].items():
+
+            if 'address' not in vs_config and 'fwmark' not in vs_config:
+                raise ConfigError('Either address or fwmark is required '
+                                  f'but not set for virtual-server "{vs}"')
+
             if 'port' not in vs_config and 'fwmark' not in vs_config:
                 raise ConfigError(f'Port or fwmark is required but not set for virtual-server "{vs}"')
             if 'port' in vs_config and 'fwmark' in vs_config:
@@ -175,7 +193,7 @@ def verify(ha):
 
 
 def generate(ha):
-    if not ha:
+    if not ha or 'disable' in ha:
         return None
 
     render(VRRP.location['config'], 'high-availability/keepalived.conf.j2', ha)
@@ -183,7 +201,7 @@ def generate(ha):
 
 def apply(ha):
     service_name = 'keepalived.service'
-    if not ha:
+    if not ha or 'disable' in ha:
         call(f'systemctl stop {service_name}')
         return None
 

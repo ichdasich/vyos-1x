@@ -11,13 +11,13 @@
                 <path>interfaces ethernet</path>
               </completionHelp>
             </properties>
-            <command>${vyos_op_scripts_dir}/interfaces.py show --intf_name="$4" --intf_type=ethernet</command>
+            <command>${vyos_op_scripts_dir}/interfaces.py show --intf-name="$4" --intf-type=ethernet</command>
             <children>
               <leafNode name="brief">
                 <properties>
                   <help>Show summary of the specified ethernet interface information</help>
                 </properties>
-                <command>${vyos_op_scripts_dir}/interfaces.py show_summary --intf_name="$4" --intf_type=ethernet</command>
+                <command>${vyos_op_scripts_dir}/interfaces.py show_summary --intf-name="$4" --intf-type=ethernet</command>
               </leafNode>
               <leafNode name="identify">
                 <properties>
@@ -58,35 +58,29 @@
                     <path>interfaces ethernet ${COMP_WORDS[3]} vif</path>
                   </completionHelp>
                 </properties>
-                <command>${vyos_op_scripts_dir}/interfaces.py show --intf_name="$4.$6" --intf_type=ethernet</command>
+                <command>${vyos_op_scripts_dir}/interfaces.py show --intf-name="$4.$6" --intf-type=ethernet</command>
                 <children>
                   <leafNode name="brief">
                     <properties>
                       <help>Show summary of specified virtual network interface (vif) information</help>
                     </properties>
-                    <command>${vyos_op_scripts_dir}/interfaces.py show_summary --intf_name="$4.$6" --intf_type=ethernet</command>
+                    <command>${vyos_op_scripts_dir}/interfaces.py show_summary --intf-name="$4.$6" --intf-type=ethernet</command>
                   </leafNode>
                 </children>
               </tagNode>
-              <leafNode name="xdp">
-                <properties>
-                  <help>Show eXpress Data Path statistics</help>
-                </properties>
-                <command>sudo ${vyos_op_scripts_dir}/show_xdp_stats.sh ethernet "$4"</command>
-              </leafNode>
             </children>
           </tagNode>
           <node name="ethernet">
             <properties>
               <help>Show Ethernet interface information</help>
             </properties>
-            <command>${vyos_op_scripts_dir}/interfaces.py show_summary --intf_type=ethernet</command>
+            <command>${vyos_op_scripts_dir}/interfaces.py show_summary --intf-type=ethernet</command>
             <children>
               <leafNode name="detail">
                 <properties>
                   <help>Show detailed ethernet interface information</help>
                 </properties>
-                <command>${vyos_op_scripts_dir}/interfaces.py show --intf_type=ethernet</command>
+                <command>${vyos_op_scripts_dir}/interfaces.py show --intf-type=ethernet</command>
               </leafNode>
             </children>
           </node>

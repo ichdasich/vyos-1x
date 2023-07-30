@@ -28,11 +28,11 @@ from vyos.configdict import node_changed
 from vyos.configdict import is_node_changed
 from vyos.configverify import verify_vrf
 from vyos.ifconfig import Interface
-from vyos.util import call
-from vyos.util import cmd
-from vyos.util import run
-from vyos.util import rc_cmd
-from vyos.util import write_file
+from vyos.utils.file import write_file
+from vyos.utils.process import call
+from vyos.utils.process import cmd
+from vyos.utils.process import run
+from vyos.utils.process import rc_cmd
 from vyos.template import inc_ip
 from vyos.template import is_ipv4
 from vyos.template import is_ipv6
@@ -321,7 +321,8 @@ def generate_run_arguments(name, container_config):
             svol = vol_config['source']
             dvol = vol_config['destination']
             mode = vol_config['mode']
-            volume += f' --volume {svol}:{dvol}:{mode}'
+            prop = vol_config['propagation']
+            volume += f' --volume {svol}:{dvol}:{mode},{prop}'
 
     container_base_cmd = f'--detach --interactive --tty --replace {cap_add} ' \
                          f'--memory {memory}m --shm-size {shared_memory}m --memory-swap 0 --restart {restart} ' \
@@ -376,11 +377,11 @@ def generate(container):
                 'name': network,
                 'id' : sha256(f'{network}'.encode()).hexdigest(),
                 'driver': 'bridge',
-                'network_interface': f'podman-{network}',
+                'network_interface': f'pod-{network}',
                 'subnets': [],
                 'ipv6_enabled': False,
                 'internal': False,
-                'dns_enabled': False,
+                'dns_enabled': True,
                 'ipam_options': {
                     'driver': 'host-local'
                 }
@@ -479,7 +480,7 @@ def apply(container):
     # the network interface in advance
     if 'network' in container:
         for network, network_config in container['network'].items():
-            network_name = f'podman-{network}'
+            network_name = f'pod-{network}'
             # T5147: Networks are started only as soon as there is a consumer.
             # If only a network is created in the first place, no need to assign
             # it to a VRF as there's no consumer, yet.

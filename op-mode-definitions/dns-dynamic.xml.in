@@ -1,16 +1,40 @@
 <?xml version="1.0"?>
 <interfaceDefinition>
+  <node name="monitor">
+    <children>
+      <node name="log">
+        <children>
+          <node name="dns">
+            <properties>
+              <help>Monitor last lines of Domain Name System related services</help>
+            </properties>
+            <children>
+              <node name="dynamic">
+                <properties>
+                  <help>Monitor last lines of Dynamic DNS update service</help>
+                </properties>
+                <command>journalctl --no-hostname --follow --boot --unit ddclient.service</command>
+              </node>
+            </children>
+          </node>
+        </children>
+      </node>
+    </children>
+  </node>
   <node name="show">
     <children>
       <node name="log">
         <children>
           <node name="dns">
+            <properties>
+              <help>Show log for Domain Name System related services</help>
+            </properties>
             <children>
               <node name="dynamic">
                 <properties>
-                  <help>Show log for dynamic DNS</help>
+                  <help>Show log for Dynamic DNS update service</help>
                 </properties>
-                <command>cat $(printf "%s\n" /var/log/messages* | sort -nr) | grep -e "ddclient"</command>
+                <command>journalctl --no-hostname --boot --unit ddclient.service</command>
               </node>
             </children>
           </node>
@@ -18,7 +42,7 @@
       </node>
       <node name="dns">
         <properties>
-          <help>Show DNS information</help>
+          <help>Show Domain Name System related information</help>
         </properties>
         <children>
           <node name="dynamic">
@@ -30,7 +54,7 @@
                 <properties>
                   <help>Show Dynamic DNS status</help>
                 </properties>
-                <command>sudo ${vyos_op_scripts_dir}/dynamic_dns.py --status</command>
+                <command>sudo ${vyos_op_scripts_dir}/dns_dynamic.py --status</command>
               </leafNode>
             </children>
           </node>
@@ -41,12 +65,15 @@
   <node name="restart">
     <children>
       <node name="dns">
+        <properties>
+          <help>Restart specific Domain Name System related service</help>
+        </properties>
         <children>
           <node name="dynamic">
             <properties>
               <help>Restart Dynamic DNS service</help>
             </properties>
-            <command>sudo ${vyos_op_scripts_dir}/dynamic_dns.py --update</command>
+            <command>sudo ${vyos_op_scripts_dir}/dns_dynamic.py --update</command>
           </node>
         </children>
       </node>
@@ -59,14 +86,14 @@
     <children>
       <node name="dns">
         <properties>
-          <help>Update DNS information</help>
+          <help>Update Domain Name System related information</help>
         </properties>
         <children>
           <node name="dynamic">
             <properties>
               <help>Update Dynamic DNS information</help>
             </properties>
-            <command>sudo ${vyos_op_scripts_dir}/dynamic_dns.py --update</command>
+            <command>sudo ${vyos_op_scripts_dir}/dns_dynamic.py --update</command>
           </node>
         </children>
       </node>

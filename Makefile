@@ -3,7 +3,7 @@ OP_TMPL_DIR := templates-op
 BUILD_DIR := build
 DATA_DIR := data
 SHIM_DIR := src/shim
-XDP_DIR := src/xdp
+CACHE_DIR := xml_cache
 LIBS := -lzmq
 CFLAGS :=
 BUILD_ARCH := $(shell dpkg-architecture -q DEB_BUILD_ARCH)
@@ -24,8 +24,11 @@ op_xml_obj = $(op_xml_src:.xml.in=.xml)
 .ONESHELL:
 interface_definitions: $(config_xml_obj)
 	mkdir -p $(TMPL_DIR)
+	mkdir -p $(CACHE_DIR)
 
 	$(CURDIR)/scripts/override-default $(BUILD_DIR)/interface-definitions
+
+	$(CURDIR)/python/vyos/xml_ref/generate_cache.py --xml-dir $(BUILD_DIR)/interface-definitions --package-name vyos-1x --output-path $(CACHE_DIR)
 
 	find $(BUILD_DIR)/interface-definitions -type f -name "*.xml" | xargs -I {} $(CURDIR)/scripts/build-command-templates {} $(CURDIR)/schema/interface_definition.rng $(TMPL_DIR) || exit 1
 
@@ -37,9 +40,6 @@ interface_definitions: $(config_xml_obj)
 	rm -rf $(TMPL_DIR)/protocols/eigrp
 	# T2773 - EIGRP support for VRF
 	rm -rf $(TMPL_DIR)/vrf/name/node.tag/protocols/eigrp
-
-	# T4518, T4470 Load-balancing wan
-	rm -rf $(TMPL_DIR)/load-balancing
 
 	# XXX: test if there are empty node.def files - this is not allowed as these
 	# could mask help strings or mandatory priority statements
@@ -63,10 +63,8 @@ op_mode_definitions: $(op_xml_obj)
 	rm -f $(OP_TMPL_DIR)/clear/node.def
 	rm -f $(OP_TMPL_DIR)/delete/node.def
 	rm -f $(OP_TMPL_DIR)/generate/node.def
-	rm -f $(OP_TMPL_DIR)/monitor/node.def
 	rm -f $(OP_TMPL_DIR)/set/node.def
-	rm -f $(OP_TMPL_DIR)/show/node.def
-	rm -f $(OP_TMPL_DIR)/show/system/node.def
+	rm -f $(OP_TMPL_DIR)/show/tech-support/node.def
 
 	# XXX: ping and traceroute must be able to recursivly call itself as the
 	# options are provided from the script itself
@@ -80,10 +78,6 @@ op_mode_definitions: $(op_xml_obj)
 .PHONY: vyshim
 vyshim:
 	$(MAKE) -C $(SHIM_DIR)
-
-.PHONY: vyxdp
-vyxdp:
-	$(MAKE) -C $(XDP_DIR)
 
 .PHONY: all
 all: clean interface_definitions op_mode_definitions check test j2lint vyshim
@@ -104,8 +98,8 @@ clean:
 	rm -rf $(BUILD_DIR)
 	rm -rf $(TMPL_DIR)
 	rm -rf $(OP_TMPL_DIR)
+	rm -rf $(CACHE_DIR)
 	$(MAKE) -C $(SHIM_DIR) clean
-	$(MAKE) -C $(XDP_DIR) clean
 
 .PHONY: test
 test:

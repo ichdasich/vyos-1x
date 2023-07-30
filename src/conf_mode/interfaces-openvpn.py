@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2019-2022 VyOS maintainers and contributors
+# Copyright (C) 2019-2023 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -50,15 +50,17 @@ from vyos.pki import wrap_private_key
 from vyos.template import render
 from vyos.template import is_ipv4
 from vyos.template import is_ipv6
-from vyos.util import call
-from vyos.util import chown
-from vyos.util import cmd
-from vyos.util import dict_search
-from vyos.util import dict_search_args
-from vyos.util import is_list_equal
-from vyos.util import makedir
-from vyos.util import read_file
-from vyos.util import write_file
+from vyos.utils.dict import dict_search
+from vyos.utils.dict import dict_search_args
+from vyos.utils.list import is_list_equal
+from vyos.utils.file import makedir
+from vyos.utils.file import read_file
+from vyos.utils.file import write_file
+from vyos.utils.kernel import check_kmod
+from vyos.utils.kernel import unload_kmod
+from vyos.utils.process import call
+from vyos.utils.permission import chown
+from vyos.utils.process import cmd
 from vyos.validate import is_addr_assigned
 
 from vyos import ConfigError
@@ -86,29 +88,44 @@ def get_config(config=None):
         conf = Config()
     base = ['interfaces', 'openvpn']
 
-    tmp_pki = conf.get_config_dict(['pki'], key_mangling=('-', '_'),
-                                get_first_key=True, no_tag_node_value_mangle=True)
-
     ifname, openvpn = get_interface_dict(conf, base)
-
-    if 'deleted' not in openvpn:
-        openvpn['pki'] = tmp_pki
-        if is_node_changed(conf, base + [ifname, 'openvpn-option']):
-            openvpn.update({'restart_required': {}})
-
-        # We have to get the dict using 'get_config_dict' instead of 'get_interface_dict'
-        # as 'get_interface_dict' merges the defaults in, so we can not check for defaults in there.
-        tmp = conf.get_config_dict(base + [openvpn['ifname']], get_first_key=True)
-
-        # We have to cleanup the config dict, as default values could enable features
-        # which are not explicitly enabled on the CLI. Example: server mfa totp
-        # originate comes with defaults, which will enable the
-        # totp plugin, even when not set via CLI so we
-        # need to check this first and drop those keys
-        if dict_search('server.mfa.totp', tmp) == None:
-            del openvpn['server']['mfa']
-
     openvpn['auth_user_pass_file'] = '/run/openvpn/{ifname}.pw'.format(**openvpn)
+
+    if 'deleted' in openvpn:
+        return openvpn
+
+    openvpn['pki'] = conf.get_config_dict(['pki'], key_mangling=('-', '_'),
+                                        get_first_key=True,
+                                        no_tag_node_value_mangle=True)
+
+    if is_node_changed(conf, base + [ifname, 'openvpn-option']):
+        openvpn.update({'restart_required': {}})
+    if is_node_changed(conf, base + [ifname, 'enable-dco']):
+        openvpn.update({'restart_required': {}})
+
+    # We have to get the dict using 'get_config_dict' instead of 'get_interface_dict'
+    # as 'get_interface_dict' merges the defaults in, so we can not check for defaults in there.
+    tmp = conf.get_config_dict(base + [openvpn['ifname']], get_first_key=True)
+
+    # We have to cleanup the config dict, as default values could enable features
+    # which are not explicitly enabled on the CLI. Example: server mfa totp
+    # originate comes with defaults, which will enable the
+    # totp plugin, even when not set via CLI so we
+    # need to check this first and drop those keys
+    if dict_search('server.mfa.totp', tmp) == None:
+        del openvpn['server']['mfa']
+
+    # OpenVPN Data-Channel-Offload (DCO) is a Kernel module. If loaded it applies to all
+    # OpenVPN interfaces. Check if DCO is used by any other interface instance.
+    tmp = conf.get_config_dict(base, key_mangling=('-', '_'), get_first_key=True)
+    for interface, interface_config in tmp.items():
+        # If one interface has DCO configured, enable it. No need to further check
+        # all other OpenVPN interfaces. We must use a dedicated key to indicate
+        # the Kernel module must be loaded or not. The per interface "offload.dco"
+        # key is required per OpenVPN interface instance.
+        if dict_search('offload.dco', interface_config) != None:
+            openvpn['module_load_dco'] = {}
+            break
 
     return openvpn
 
@@ -597,7 +614,7 @@ def generate_pki_files(openvpn):
 def generate(openvpn):
     interface = openvpn['ifname']
     directory = os.path.dirname(cfg_file.format(**openvpn))
-    plugin_dir = '/usr/lib/openvpn'
+    openvpn['plugin_dir'] = '/usr/lib/openvpn'
     # create base config directory on demand
     makedir(directory, user, group)
     # enforce proper permissions on /run/openvpn
@@ -670,6 +687,15 @@ def apply(openvpn):
         if interface in interfaces():
             VTunIf(interface).remove()
 
+    # dynamically load/unload DCO Kernel extension if requested
+    dco_module = 'ovpn_dco_v2'
+    if 'module_load_dco' in openvpn:
+        check_kmod(dco_module)
+    else:
+        unload_kmod(dco_module)
+
+    # Now bail out early if interface is disabled or got deleted
+    if 'deleted' in openvpn or 'disable' in openvpn:
         return None
 
     # verify specified IP address is present on any interface on this system

@@ -34,6 +34,7 @@
             </properties>
             <children>
               #include <include/interface/disable-forwarding.xml.i>
+              #include <include/system-ip-protocol.xml.i>
             </children>
           </node>
           <node name="ipv6">
@@ -42,6 +43,7 @@
             </properties>
             <children>
               #include <include/interface/disable-forwarding.xml.i>
+              #include <include/system-ipv6-protocol.xml.i>
             </children>
           </node>
           <node name="protocols">
@@ -119,10 +121,10 @@
               <constraintErrorMessage>VRF routing table must be in range from 100 to 65535</constraintErrorMessage>
             </properties>
           </leafNode>
-          <leafNode name="vni" owner="${vyos_conf_scripts_dir}/vrf_vni.py">
+          <leafNode name="vni" owner="${vyos_conf_scripts_dir}/vrf_vni.py $VAR(../@)">
             <properties>
               <help>Virtual Network Identifier</help>
-              <!-- priority must be after BGP -->
+              <!-- must be after BGP to keep correct order when removing L3VNIs in FRR -->
               <priority>822</priority>
               <valueHelp>
                 <format>u32:0-16777214</format>

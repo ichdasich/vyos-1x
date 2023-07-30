@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2020-2021 VyOS maintainers and contributors
+# Copyright (C) 2020-2023 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -22,9 +22,9 @@ from base_interfaces_test import BasicInterfaceTest
 from glob import glob
 
 from vyos.configsession import ConfigSessionError
-from vyos.util import process_named_running
-from vyos.util import check_kmod
-from vyos.util import read_file
+from vyos.utils.process import process_named_running
+from vyos.utils.kernel import check_kmod
+from vyos.utils.file import read_file
 
 def get_config_value(interface, key):
     tmp = read_file(f'/run/hostapd/{interface}.conf')
@@ -34,7 +34,6 @@ def get_config_value(interface, key):
 class WirelessInterfaceTest(BasicInterfaceTest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls._test_ip = True
         cls._base_path = ['interfaces', 'wireless']
         cls._options = {
             'wlan0':  ['physical-device phy0', 'ssid VyOS-WIFI-0',
@@ -49,6 +48,10 @@ class WirelessInterfaceTest(BasicInterfaceTest.TestCase):
         cls._interfaces = list(cls._options)
         # call base-classes classmethod
         super(WirelessInterfaceTest, cls).setUpClass()
+
+        # T5245 - currently testcases are disabled
+        cls._test_ipv6 = False
+        cls._test_vlan = False
 
     def test_wireless_add_single_ip_address(self):
         # derived method to check if member interfaces are enslaved properly

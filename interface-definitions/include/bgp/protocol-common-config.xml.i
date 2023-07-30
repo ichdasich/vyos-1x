@@ -355,15 +355,7 @@
             <help>Apply local policy routing to interface</help>
           </properties>
           <children>
-            <leafNode name="interface">
-              <properties>
-                <help>Interface</help>
-                <completionHelp>
-                  <script>${vyos_completion_dir}/list_interfaces</script>
-                </completionHelp>
-                <multi/>
-              </properties>
-            </leafNode>
+            #include <include/generic-interface-multi.xml.i>
           </children>
         </node>
       </children>
@@ -386,18 +378,7 @@
           </properties>
           <children>
             #include <include/bgp/route-distinguisher.xml.i>
-            <leafNode name="label">
-              <properties>
-                <help>MPLS label value assigned to route</help>
-                <valueHelp>
-                  <format>u32:0-1048575</format>
-                  <description>MPLS label value</description>
-                </valueHelp>
-                <constraint>
-                  <validator name="numeric" argument="--range 0-1048575"/>
-                </constraint>
-              </properties>
-            </leafNode>
+            #include <include/bgp/afi-vpn-label.xml.i>
           </children>
         </tagNode>
       </children>
@@ -766,18 +747,7 @@
           </properties>
           <children>
             #include <include/bgp/route-distinguisher.xml.i>
-            <leafNode name="label">
-              <properties>
-                <help>MPLS label value assigned to route</help>
-                <valueHelp>
-                  <format>u32:0-1048575</format>
-                  <description>MPLS label value</description>
-                </valueHelp>
-                <constraint>
-                  <validator name="numeric" argument="--range 0-1048575"/>
-                </constraint>
-              </properties>
-            </leafNode>
+            #include <include/bgp/afi-vpn-label.xml.i>
           </children>
         </tagNode>
       </children>
@@ -840,12 +810,7 @@
             <help>Specify handling for BUM packets</help>
           </properties>
           <children>
-            <leafNode name="disable">
-              <properties>
-                <help>Do not flood any BUM packets</help>
-                <valueless/>
-              </properties>
-            </leafNode>
+            #include <include/generic-disable-node.xml.i>
             <leafNode name="head-end-replication">
               <properties>
                 <help>Flood BUM packets using head-end replication</help>
@@ -873,6 +838,36 @@
     </node>
   </children>
 </node>
+<tagNode name="interface">
+  <properties>
+    <help>Configure interface related parameters, e.g. MPLS</help>
+    <completionHelp>
+      <script>${vyos_completion_dir}/list_interfaces</script>
+    </completionHelp>
+    <valueHelp>
+      <format>txt</format>
+      <description>Interface name</description>
+    </valueHelp>
+    <constraint>
+      #include <include/constraint/interface-name.xml.i>
+    </constraint>
+  </properties>
+  <children>
+    <node name="mpls">
+      <properties>
+        <help>MPLS options</help>
+      </properties>
+      <children>
+        <leafNode name="forwarding">
+          <properties>
+            <help>Enable MPLS forwarding for eBGP directly connected peers</help>
+            <valueless/>
+          </properties>
+        </leafNode>
+      </children>
+    </node>
+  </children>
+</tagNode>
 <node name="listen">
   <properties>
     <help>Listen for and accept BGP dynamic neighbors from range</help>
@@ -940,8 +935,7 @@
       <description>Interface name</description>
     </valueHelp>
     <constraint>
-      <validator name="ipv4-address"/>
-      <validator name="ipv6-address"/>
+      <validator name="ip-address"/>
       #include <include/constraint/interface-name.xml.i>
     </constraint>
   </properties>
@@ -1014,6 +1008,12 @@
     <leafNode name="solo">
       <properties>
         <help>Do not send back prefixes learned from the neighbor</help>
+        <valueless/>
+      </properties>
+    </leafNode>
+    <leafNode name="enforce-first-as">
+      <properties>
+        <help>Ensure the first AS in the AS path matches the peer AS</help>
         <valueless/>
       </properties>
     </leafNode>
@@ -1540,7 +1540,9 @@
       </properties>
       <children>
         #include <include/bgp/neighbor-afi-ipv4-unicast.xml.i>
+        #include <include/bgp/neighbor-afi-ipv4-vpn.xml.i>
         #include <include/bgp/neighbor-afi-ipv6-unicast.xml.i>
+        #include <include/bgp/neighbor-afi-ipv6-vpn.xml.i>
         #include <include/bgp/neighbor-afi-l2vpn-evpn.xml.i>
       </children>
     </node>
@@ -1565,7 +1567,6 @@
     #include <include/port-number.xml.i>
   </children>
 </tagNode>
-#include <include/route-map.xml.i>
 <node name="timers">
   <properties>
     <help>BGP protocol timers</help>

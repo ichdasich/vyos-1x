@@ -27,8 +27,8 @@ from vyos.configverify import verify_route_map
 from vyos.configverify import verify_interface_exists
 from vyos.template import render_to_string
 from vyos.ifconfig import Interface
-from vyos.util import dict_search
-from vyos.util import get_interface_config
+from vyos.utils.dict import dict_search
+from vyos.utils.network import get_interface_config
 from vyos.xml import defaults
 from vyos import ConfigError
 from vyos import frr
@@ -83,6 +83,8 @@ def get_config(config=None):
     # need to check this first and probably drop that key.
     if dict_search('default_information.originate', ospfv3) is None:
         del default_values['default_information']
+    if 'graceful_restart' not in ospfv3:
+        del default_values['graceful_restart']
 
     # XXX: T2665: we currently have no nice way for defaults under tag nodes,
     # clean them out and add them manually :(
@@ -138,7 +140,7 @@ def verify(ospfv3):
                 vrf = ospfv3['vrf']
                 tmp = get_interface_config(interface)
                 if 'master' not in tmp or tmp['master'] != vrf:
-                    raise ConfigError(f'Interface {interface} is not a member of VRF {vrf}!')
+                    raise ConfigError(f'Interface "{interface}" is not a member of VRF "{vrf}"!')
 
     return None
 
@@ -146,24 +148,14 @@ def generate(ospfv3):
     if not ospfv3 or 'deleted' in ospfv3:
         return None
 
-    ospfv3['protocol'] = 'ospf6' # required for frr/vrf.route-map.v6.frr.j2
-    ospfv3['frr_zebra_config'] = render_to_string('frr/vrf.route-map.v6.frr.j2', ospfv3)
     ospfv3['new_frr_config'] = render_to_string('frr/ospf6d.frr.j2', ospfv3)
     return None
 
 def apply(ospfv3):
     ospf6_daemon = 'ospf6d'
-    zebra_daemon = 'zebra'
 
     # Save original configuration prior to starting any commit actions
     frr_cfg = frr.FRRConfig()
-
-    # The route-map used for the FIB (zebra) is part of the zebra daemon
-    frr_cfg.load_configuration(zebra_daemon)
-    frr_cfg.modify_section('(\s+)?ipv6 protocol ospf6 route-map [-a-zA-Z0-9.]+', stop_pattern='(\s|!)')
-    if 'frr_zebra_config' in ospfv3:
-        frr_cfg.add_before(frr.default_add_before, ospfv3['frr_zebra_config'])
-    frr_cfg.commit_configuration(zebra_daemon)
 
     # Generate empty helper string which can be ammended to FRR commands, it
     # will be either empty (default VRF) or contain the "vrf <name" statement

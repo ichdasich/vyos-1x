@@ -6,9 +6,10 @@ etc/netplug
 etc/opennhrp
 etc/modprobe.d
 etc/ppp
-etc/rsyslog.d
+etc/rsyslog.conf
 etc/securetty
 etc/security
+etc/skel
 etc/sudoers.d
 etc/systemd
 etc/sysctl.d
@@ -29,6 +30,7 @@ usr/bin/vyos-hostsd-client
 usr/lib
 usr/libexec/vyos/completion
 usr/libexec/vyos/conf_mode
+usr/libexec/vyos/init
 usr/libexec/vyos/op_mode
 usr/libexec/vyos/services
 usr/libexec/vyos/system

@@ -201,7 +201,9 @@ class ConfigTree(object):
         check_path(path)
         path_str = " ".join(map(str, path)).encode()
 
-        self.__delete(self.__config, path_str)
+        res = self.__delete(self.__config, path_str)
+        if (res != 0):
+            raise ConfigTreeError(f"Path doesn't exist: {path}")
 
         if self.__migration:
             print(f"- op: delete path: {path}")
@@ -210,7 +212,14 @@ class ConfigTree(object):
         check_path(path)
         path_str = " ".join(map(str, path)).encode()
 
-        self.__delete_value(self.__config, path_str, value.encode())
+        res = self.__delete_value(self.__config, path_str, value.encode())
+        if (res != 0):
+            if res == 1:
+                raise ConfigTreeError(f"Path doesn't exist: {path}")
+            elif res == 2:
+                raise ConfigTreeError(f"Value doesn't exist: '{value}'")
+            else:
+                raise ConfigTreeError()
 
         if self.__migration:
             print(f"- op: delete_value path: {path} value: {value}")
@@ -373,6 +382,19 @@ def union(left, right, libpath=LIBPATH):
 
     return tree
 
+def reference_tree_to_json(from_dir, to_file, libpath=LIBPATH):
+    __lib = cdll.LoadLibrary(libpath)
+    __reference_tree_to_json = __lib.reference_tree_to_json
+    __reference_tree_to_json.argtypes = [c_char_p, c_char_p]
+    __get_error = __lib.get_error
+    __get_error.argtypes = []
+    __get_error.restype = c_char_p
+
+    res = __reference_tree_to_json(from_dir.encode(), to_file.encode())
+    if res == 1:
+        msg = __get_error().decode()
+        raise ConfigTreeError(msg)
+
 class DiffTree:
     def __init__(self, left, right, path=[], libpath=LIBPATH):
         if left is None:
@@ -396,10 +418,6 @@ class DiffTree:
         self.__diff_tree.argtypes = [c_char_p, c_void_p, c_void_p]
         self.__diff_tree.restype = c_void_p
 
-        self.__trim_tree = self.__lib.trim_tree
-        self.__trim_tree.argtypes = [c_void_p, c_void_p]
-        self.__trim_tree.restype = c_void_p
-
         check_path(path)
         path_str = " ".join(map(str, path)).encode()
 
@@ -413,11 +431,7 @@ class DiffTree:
         self.add = self.full.get_subtree(['add'])
         self.sub = self.full.get_subtree(['sub'])
         self.inter = self.full.get_subtree(['inter'])
-
-        # trim sub(-tract) tree to get delete tree for commands
-        ref = self.right.get_subtree(path, with_node=True) if path else self.right
-        res = self.__trim_tree(self.sub._get_config(), ref._get_config())
-        self.delete = ConfigTree(address=res)
+        self.delete = self.full.get_subtree(['del'])
 
     def to_commands(self):
         add = self.add.to_commands()

@@ -5,7 +5,7 @@
     <children>
       <node name="dns">
         <properties>
-          <help>Domain Name System related services</help>
+          <help>Domain Name System (DNS) related services</help>
         </properties>
         <children>
           <node name="forwarding" owner="${vyos_conf_scripts_dir}/dns_forwarding.py">
@@ -83,6 +83,13 @@
               <tagNode name="domain">
                 <properties>
                   <help>Domain to forward to a custom DNS server</help>
+                  <valueHelp>
+                    <format>txt</format>
+                    <description>An absolute DNS domain name</description>
+                  </valueHelp>
+                  <constraint>
+                    <validator name="fqdn"/>
+                  </constraint>
                 </properties>
                 <children>
                   #include <include/name-server-ipv4-ipv6-port.xml.i>
@@ -104,11 +111,11 @@
                 <properties>
                   <help>Domain to host authoritative records for</help>
                   <valueHelp>
-                    <format>text</format>
-                    <description>An absolute DNS name</description>
+                    <format>txt</format>
+                    <description>An absolute DNS domain name</description>
                   </valueHelp>
                   <constraint>
-                    <regex>[-_a-zA-Z0-9.]{1,63}</regex>
+                    <validator name="fqdn"/>
                   </constraint>
                 </properties>
                 <children>
@@ -119,9 +126,9 @@
                     <children>
                       <tagNode name="a">
                         <properties>
-                          <help>"A" record</help>
+                          <help>A record</help>
                           <valueHelp>
-                            <format>text</format>
+                            <format>txt</format>
                             <description>A DNS name relative to the root record</description>
                           </valueHelp>
                           <valueHelp>
@@ -156,9 +163,9 @@
                       </tagNode>
                       <tagNode name="aaaa">
                         <properties>
-                          <help>"AAAA" record</help>
+                          <help>AAAA record</help>
                           <valueHelp>
-                            <format>text</format>
+                            <format>txt</format>
                             <description>A DNS name relative to the root record</description>
                           </valueHelp>
                           <valueHelp>
@@ -193,9 +200,9 @@
                       </tagNode>
                       <tagNode name="cname">
                         <properties>
-                          <help>"CNAME" record</help>
+                          <help>CNAME record</help>
                           <valueHelp>
-                            <format>text</format>
+                            <format>txt</format>
                             <description>A DNS name relative to the root record</description>
                           </valueHelp>
                           <valueHelp>
@@ -212,7 +219,7 @@
                               <help>Target DNS name</help>
                               <valueHelp>
                                 <format>name.example.com</format>
-                                <description>An absolute DNS name</description>
+                                <description>Absolute DNS name</description>
                               </valueHelp>
                               <constraint>
                                 <regex>[-_a-zA-Z0-9.]{1,63}(?&lt;!\.)</regex>
@@ -225,9 +232,9 @@
                       </tagNode>
                       <tagNode name="mx">
                         <properties>
-                          <help>"MX" record</help>
+                          <help>MX record</help>
                           <valueHelp>
-                            <format>text</format>
+                            <format>txt</format>
                             <description>A DNS name relative to the root record</description>
                           </valueHelp>
                           <valueHelp>
@@ -244,7 +251,7 @@
                               <help>Mail server</help>
                               <valueHelp>
                                 <format>name.example.com</format>
-                                <description>An absolute DNS name</description>
+                                <description>Absolute DNS name</description>
                               </valueHelp>
                               <constraint>
                                 <regex>[-_a-zA-Z0-9.]{1,63}(?&lt;!\.)</regex>
@@ -270,11 +277,39 @@
                           #include <include/generic-disable-node.xml.i>
                         </children>
                       </tagNode>
+                      <tagNode name="ns">
+                        <properties>
+                          <help>NS record</help>
+                          <valueHelp>
+                            <format>txt</format>
+                            <description>A DNS name relative to the root record</description>
+                          </valueHelp>
+                          <constraint>
+                            <regex>([-_a-zA-Z0-9.]{1,63}|@)(?&lt;!\.)</regex>
+                          </constraint>
+                        </properties>
+                        <children>
+                          <leafNode name="target">
+                            <properties>
+                              <help>Target DNS server authoritative for subdomain</help>
+                              <valueHelp>
+                                <format>nsXX.example.com</format>
+                                <description>Absolute DNS name</description>
+                              </valueHelp>
+                              <constraint>
+                                <regex>[-_a-zA-Z0-9.]{1,63}(?&lt;!\.)</regex>
+                              </constraint>
+                            </properties>
+                          </leafNode>
+                          #include <include/dns/time-to-live.xml.i>
+                          #include <include/generic-disable-node.xml.i>
+                        </children>
+                      </tagNode>
                       <tagNode name="ptr">
                         <properties>
-                          <help>"PTR" record</help>
+                          <help>PTR record</help>
                           <valueHelp>
-                            <format>text</format>
+                            <format>txt</format>
                             <description>A DNS name relative to the root record</description>
                           </valueHelp>
                           <valueHelp>
@@ -291,7 +326,7 @@
                               <help>Target DNS name</help>
                               <valueHelp>
                                 <format>name.example.com</format>
-                                <description>An absolute DNS name</description>
+                                <description>Absolute DNS name</description>
                               </valueHelp>
                               <constraint>
                                 <regex>[-_a-zA-Z0-9.]{1,63}(?&lt;!\.)</regex>
@@ -304,9 +339,9 @@
                       </tagNode>
                       <tagNode name="txt">
                         <properties>
-                          <help>"TXT" record</help>
+                          <help>TXT record</help>
                           <valueHelp>
-                            <format>text</format>
+                            <format>txt</format>
                             <description>A DNS name relative to the root record</description>
                           </valueHelp>
                           <valueHelp>
@@ -322,7 +357,7 @@
                             <properties>
                               <help>Record contents</help>
                               <valueHelp>
-                                <format>text</format>
+                                <format>txt</format>
                                 <description>Record contents</description>
                               </valueHelp>
                               <multi/>
@@ -334,9 +369,9 @@
                       </tagNode>
                       <tagNode name="spf">
                         <properties>
-                          <help>"SPF" record (type=SPF)</help>
+                          <help>SPF record</help>
                           <valueHelp>
-                            <format>text</format>
+                            <format>txt</format>
                             <description>A DNS name relative to the root record</description>
                           </valueHelp>
                           <valueHelp>
@@ -352,7 +387,7 @@
                             <properties>
                               <help>Record contents</help>
                               <valueHelp>
-                                <format>text</format>
+                                <format>txt</format>
                                 <description>Record contents</description>
                               </valueHelp>
                             </properties>
@@ -363,9 +398,9 @@
                       </tagNode>
                       <tagNode name="srv">
                         <properties>
-                          <help>"SRV" record</help>
+                          <help>SRV record</help>
                           <valueHelp>
-                            <format>text</format>
+                            <format>txt</format>
                             <description>A DNS name relative to the root record</description>
                           </valueHelp>
                           <valueHelp>
@@ -394,7 +429,7 @@
                                   <help>Server hostname</help>
                                   <valueHelp>
                                     <format>name.example.com</format>
-                                    <description>An absolute DNS name</description>
+                                    <description>Absolute DNS name</description>
                                   </valueHelp>
                                   <constraint>
                                     <regex>[-_a-zA-Z0-9.]{1,63}(?&lt;!\.)</regex>
@@ -447,9 +482,9 @@
                       </tagNode>
                       <tagNode name="naptr">
                         <properties>
-                          <help>"NAPTR" record</help>
+                          <help>NAPTR record</help>
                           <valueHelp>
-                            <format>text</format>
+                            <format>txt</format>
                             <description>A DNS name relative to the root record</description>
                           </valueHelp>
                           <valueHelp>
@@ -500,25 +535,25 @@
                               </leafNode>
                               <leafNode name="lookup-srv">
                                 <properties>
-                                  <help>"S" flag</help>
+                                  <help>S flag</help>
                                   <valueless/>
                                 </properties>
                               </leafNode>
                               <leafNode name="lookup-a">
                                 <properties>
-                                  <help>"A" flag</help>
+                                  <help>A flag</help>
                                   <valueless/>
                                 </properties>
                               </leafNode>
                               <leafNode name="resolve-uri">
                                 <properties>
-                                  <help>"U" flag</help>
+                                  <help>U flag</help>
                                   <valueless/>
                                 </properties>
                               </leafNode>
                               <leafNode name="protocol-specific">
                                 <properties>
-                                  <help>"P" flag</help>
+                                  <help>P flag</help>
                                   <valueless/>
                                 </properties>
                               </leafNode>
@@ -540,7 +575,7 @@
                                   <help>Replacement DNS name</help>
                                   <valueHelp>
                                     <format>name.example.com</format>
-                                    <description>An absolute DNS name</description>
+                                    <description>Absolute DNS name</description>
                                   </valueHelp>
                                   <constraint>
                                     <regex>[-_a-zA-Z0-9.]{1,63}(?&lt;!\.)</regex>
@@ -635,8 +670,7 @@
                   </valueHelp>
                   <multi/>
                   <constraint>
-                    <validator name="ipv4-address"/>
-                    <validator name="ipv6-address"/>
+                    <validator name="ip-address"/>
                   </constraint>
                 </properties>
                 <defaultValue>0.0.0.0 ::</defaultValue>

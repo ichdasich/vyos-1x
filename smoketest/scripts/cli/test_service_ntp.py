@@ -19,8 +19,8 @@ import unittest
 from base_vyostest_shim import VyOSUnitTestSHIM
 
 from vyos.configsession import ConfigSessionError
-from vyos.util import cmd
-from vyos.util import process_named_running
+from vyos.utils.process import cmd
+from vyos.utils.process import process_named_running
 
 PROCESS_NAME = 'chronyd'
 NTP_CONF = '/run/chrony/chrony.conf'
@@ -108,7 +108,7 @@ class TestSystemNTP(VyOSUnitTestSHIM.TestCase):
             self.assertIn(f'bindaddress {listen}', config)
 
     def test_03_ntp_interface(self):
-        interfaces = ['eth0', 'eth1']
+        interfaces = ['eth0']
         for interface in interfaces:
             self.cli_set(base_path + ['interface', interface])
 

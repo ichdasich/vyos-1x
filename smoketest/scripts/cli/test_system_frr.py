@@ -17,7 +17,7 @@
 import re
 import unittest
 from base_vyostest_shim import VyOSUnitTestSHIM
-from vyos.util import read_file
+from vyos.utils.file import read_file
 
 config_file = '/etc/frr/daemons'
 base_path = ['system', 'frr']
@@ -143,4 +143,4 @@ class TestSystemFRR(VyOSUnitTestSHIM.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main(verbosity=2, failfast=True)
+    unittest.main(verbosity=2)

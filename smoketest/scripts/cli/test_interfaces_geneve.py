@@ -17,15 +17,13 @@
 import unittest
 
 from vyos.ifconfig import Interface
-from vyos.util import get_interface_config
+from vyos.utils.network import get_interface_config
 
 from base_interfaces_test import BasicInterfaceTest
 
 class GeneveInterfaceTest(BasicInterfaceTest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls._test_ip = True
-        cls._test_ipv6 = True
         cls._base_path = ['interfaces', 'geneve']
         cls._options = {
             'gnv0': ['vni 10', 'remote 127.0.1.1'],
@@ -45,6 +43,7 @@ class GeneveInterfaceTest(BasicInterfaceTest.TestCase):
 
             self.cli_set(self._base_path + [intf, 'parameters', 'ip', 'df', 'set'])
             self.cli_set(self._base_path + [intf, 'parameters', 'ip', 'tos', tos])
+            self.cli_set(self._base_path + [intf, 'parameters', 'ip', 'innerproto'])
             self.cli_set(self._base_path + [intf, 'parameters', 'ip', 'ttl', str(ttl)])
             ttl += 10
 
@@ -68,6 +67,11 @@ class GeneveInterfaceTest(BasicInterfaceTest.TestCase):
             if any('flowlabel' in s for s in self._options[interface]):
                 label = options['linkinfo']['info_data']['label']
                 self.assertIn(f'parameters ipv6 flowlabel {label}', self._options[interface])
+
+            if any('innerproto' in s for s in self._options[interface]):
+                inner = options['linkinfo']['info_data']['innerproto']
+                self.assertIn(f'parameters ip {inner}', self._options[interface])
+
 
             self.assertEqual('geneve',        options['linkinfo']['info_kind'])
             self.assertEqual('set',      options['linkinfo']['info_data']['df'])

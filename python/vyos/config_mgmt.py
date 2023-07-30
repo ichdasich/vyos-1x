@@ -18,15 +18,21 @@ import re
 import sys
 import gzip
 import logging
+
 from typing import Optional, Tuple, Union
 from filecmp import cmp
 from datetime import datetime
+from textwrap import dedent
+from pathlib import Path
 from tabulate import tabulate
 
 from vyos.config import Config
 from vyos.configtree import ConfigTree, ConfigTreeError, show_diff
 from vyos.defaults import directories
-from vyos.util import is_systemd_service_active, ask_yes_no, rc_cmd
+from vyos.version import get_full_version_data
+from vyos.utils.io import ask_yes_no
+from vyos.utils.process import is_systemd_service_active
+from vyos.utils.process import rc_cmd
 
 SAVE_CONFIG = '/opt/vyatta/sbin/vyatta-save-config.pl'
 
@@ -55,6 +61,44 @@ ch = logging.StreamHandler()
 formatter = logging.Formatter('%(funcName)s: %(levelname)s:%(message)s')
 ch.setFormatter(formatter)
 logger.addHandler(ch)
+
+def save_config(target):
+    cmd = f'{SAVE_CONFIG} {target}'
+    rc, out = rc_cmd(cmd)
+    if rc != 0:
+        logger.critical(f'save config failed: {out}')
+
+def unsaved_commits() -> bool:
+    if get_full_version_data()['boot_via'] == 'livecd':
+        return False
+    tmp_save = '/tmp/config.running'
+    save_config(tmp_save)
+    ret = not cmp(tmp_save, config_file, shallow=False)
+    os.unlink(tmp_save)
+    return ret
+
+def get_file_revision(rev: int):
+    revision = os.path.join(archive_dir, f'config.boot.{rev}.gz')
+    try:
+        with gzip.open(revision) as f:
+            r = f.read().decode()
+    except FileNotFoundError:
+        logger.warning(f'commit revision {rev} not available')
+        return ''
+    return r
+
+def get_config_tree_revision(rev: int):
+    c = get_file_revision(rev)
+    return ConfigTree(c)
+
+def is_node_revised(path: list = [], rev1: int = 1, rev2: int = 0) -> bool:
+    from vyos.configtree import DiffTree
+    left = get_config_tree_revision(rev1)
+    right = get_config_tree_revision(rev2)
+    diff_tree = DiffTree(left, right)
+    if diff_tree.add.exists(path) or diff_tree.sub.exists(path):
+        return True
+    return False
 
 class ConfigMgmtError(Exception):
     pass
@@ -98,20 +142,6 @@ class ConfigMgmt:
         self.active_config = config._running_config
         self.working_config = config._session_config
 
-    @staticmethod
-    def save_config(target):
-        cmd = f'{SAVE_CONFIG} {target}'
-        rc, out = rc_cmd(cmd)
-        if rc != 0:
-            logger.critical(f'save config failed: {out}')
-
-    def _unsaved_commits(self) -> bool:
-        tmp_save = '/tmp/config.boot.check-save'
-        self.save_config(tmp_save)
-        ret = not cmp(tmp_save, config_file, shallow=False)
-        os.unlink(tmp_save)
-        return ret
-
     # Console script functions
     #
     def commit_confirm(self, minutes: int=DEFAULT_TIME_MINUTES,
@@ -123,7 +153,7 @@ class ConfigMgmt:
             msg = 'Another confirm is pending'
             return msg, 1
 
-        if self._unsaved_commits():
+        if unsaved_commits():
             W = '\nYou should save previous commits before commit-confirm !\n'
         else:
             W = ''
@@ -431,26 +461,25 @@ Proceed ?'''
         return ConfigTree(c)
 
     def _add_logrotate_conf(self):
-        conf = f"""{archive_config_file} {{
-    su root vyattacfg
-    rotate {self.max_revisions}
-    start 0
-    compress
-    copy
-}}"""
-        mask = os.umask(0o133)
-
-        with open(logrotate_conf, 'w') as f:
-            f.write(conf)
-
-        os.umask(mask)
+        conf: str = dedent(f"""\
+        {archive_config_file} {{
+            su root vyattacfg
+            rotate {self.max_revisions}
+            start 0
+            compress
+            copy
+        }}
+        """)
+        conf_file = Path(logrotate_conf)
+        conf_file.write_text(conf)
+        conf_file.chmod(0o644)
 
     def _archive_active_config(self) -> bool:
         mask = os.umask(0o113)
 
         ext = os.getpid()
         tmp_save = f'/tmp/config.boot.{ext}'
-        self.save_config(tmp_save)
+        save_config(tmp_save)
 
         try:
             if cmp(tmp_save, archive_config_file, shallow=False):

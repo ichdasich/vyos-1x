@@ -22,6 +22,7 @@ MINQUANTUM = 1000
 
 class TrafficShaper(QoSBase):
     _parent = 1
+    qostype = 'shaper'
 
     # https://man7.org/linux/man-pages/man8/tc-htb.8.html
     def update(self, config, direction):
@@ -70,7 +71,17 @@ class TrafficShaper(QoSBase):
                 cls = int(cls)
 
                 # bandwidth is a mandatory CLI node
-                rate = self._rate_convert(cls_config['bandwidth'])
+                # T5296 if bandwidth 'auto' or 'xx%' get value from config shaper total "bandwidth"
+                # i.e from  set shaper test bandwidth '300mbit'
+                # without it, it tries to get value from qos.base /sys/class/net/{self._interface}/speed
+                if cls_config['bandwidth'] == 'auto':
+                    rate = self._rate_convert(config['bandwidth'])
+                elif cls_config['bandwidth'].endswith('%'):
+                    percent = cls_config['bandwidth'].rstrip('%')
+                    rate = self._rate_convert(config['bandwidth']) * int(percent) // 100
+                else:
+                    rate = self._rate_convert(cls_config['bandwidth'])
+
                 burst = cls_config['burst']
                 quantum = cls_config['codel_quantum']
 

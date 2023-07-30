@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2018-2021 VyOS maintainers and contributors
+# Copyright (C) 2018-2023 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -18,16 +18,15 @@ import re
 import sys
 import copy
 
-import vyos.util
 import vyos.hostsd_client
 
 from vyos.base import Warning
 from vyos.config import Config
 from vyos.ifconfig import Section
 from vyos.template import is_ip
-from vyos.util import cmd
-from vyos.util import call
-from vyos.util import process_named_running
+from vyos.utils.process import cmd
+from vyos.utils.process import call
+from vyos.utils.process import process_named_running
 from vyos import ConfigError
 from vyos import airbag
 airbag.enable()

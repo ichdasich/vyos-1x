@@ -1,4 +1,4 @@
-# Copyright 2021 VyOS maintainers and contributors <maintainers@vyos.io>
+# Copyright 2021-2023 VyOS maintainers and contributors <maintainers@vyos.io>
 #
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
@@ -19,9 +19,11 @@ settings from op mode, and execution of arbitrary op mode commands.
 '''
 
 import os
-from subprocess import STDOUT
 
-from  vyos.util import popen, boot_configuration_complete
+from vyos.utils.process import STDOUT
+from vyos.utils.process import popen
+
+from vyos.utils.boot import boot_configuration_complete
 from vyos.config import Config
 from vyos.configsource import ConfigSourceSession, ConfigSourceString
 from vyos.defaults import directories

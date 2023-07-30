@@ -1,4 +1,4 @@
-# Copyright 2022 VyOS maintainers and contributors <maintainers@vyos.io>
+# Copyright 2022-2023 VyOS maintainers and contributors <maintainers@vyos.io>
 #
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
@@ -16,14 +16,52 @@
 import os
 
 from vyos.base import Warning
-from vyos.util import cmd
-from vyos.util import dict_search
-from vyos.util import read_file
+from vyos.utils.process import cmd
+from vyos.utils.dict import dict_search
+from vyos.utils.file import read_file
+
+from vyos.utils.network import get_protocol_by_name
+
 
 class QoSBase:
     _debug = False
     _direction = ['egress']
     _parent = 0xffff
+    _dsfields = {
+        "default": 0x0,
+        "lowdelay": 0x10,
+        "throughput": 0x08,
+        "reliability": 0x04,
+        "mincost": 0x02,
+        "priority": 0x20,
+        "immediate": 0x40,
+        "flash": 0x60,
+        "flash-override": 0x80,
+        "critical": 0x0A,
+        "internet": 0xC0,
+        "network": 0xE0,
+        "AF11": 0x28,
+        "AF12": 0x30,
+        "AF13": 0x38,
+        "AF21": 0x48,
+        "AF22": 0x50,
+        "AF23": 0x58,
+        "AF31": 0x68,
+        "AF32": 0x70,
+        "AF33": 0x78,
+        "AF41": 0x88,
+        "AF42": 0x90,
+        "AF43": 0x98,
+        "CS1": 0x20,
+        "CS2": 0x40,
+        "CS3": 0x60,
+        "CS4": 0x80,
+        "CS5": 0xA0,
+        "CS6": 0xC0,
+        "CS7": 0xE0,
+        "EF": 0xB8
+    }
+    qostype = None
 
     def __init__(self, interface):
         if os.path.exists('/tmp/vyos.qos.debug'):
@@ -44,6 +82,12 @@ class QoSBase:
             tmp.sort(key=lambda ii: int(ii))
             return tmp[-1]
         return None
+
+    def _get_dsfield(self, value):
+        if value in self._dsfields:
+            return self._dsfields[value]
+        else:
+            return value
 
     def _build_base_qdisc(self, config : dict, cls_id : int):
         """
@@ -160,18 +204,21 @@ class QoSBase:
                 self._build_base_qdisc(cls_config, int(cls))
 
                 # every match criteria has it's tc instance
-                filter_cmd = f'tc filter replace dev {self._interface} parent {self._parent:x}:'
+                filter_cmd_base = f'tc filter add dev {self._interface} parent {self._parent:x}:'
 
                 if priority:
-                    filter_cmd += f' prio {cls}'
+                    filter_cmd_base += f' prio {cls}'
                 elif 'priority' in cls_config:
                     prio = cls_config['priority']
-                    filter_cmd += f' prio {prio}'
+                    filter_cmd_base += f' prio {prio}'
 
-                filter_cmd += ' protocol all'
+                filter_cmd_base += ' protocol all'
 
                 if 'match' in cls_config:
-                    for match, match_config in cls_config['match'].items():
+                    for index, (match, match_config) in enumerate(cls_config['match'].items(), start=1):
+                        filter_cmd = filter_cmd_base
+                        if self.qostype == 'shaper' and 'prio ' not in filter_cmd:
+                            filter_cmd += f' prio {index}'
                         if 'mark' in match_config:
                             mark = match_config['mark']
                             filter_cmd += f' handle {mark} fw'
@@ -197,7 +244,17 @@ class QoSBase:
                                 if tmp: filter_cmd += f' match {tc_af} dport {tmp} 0xffff'
 
                                 tmp = dict_search(f'{af}.protocol', match_config)
-                                if tmp: filter_cmd += f' match {tc_af} protocol {tmp} 0xff'
+                                if tmp:
+                                    tmp = get_protocol_by_name(tmp)
+                                    filter_cmd += f' match {tc_af} protocol {tmp} 0xff'
+
+                                tmp = dict_search(f'{af}.dscp', match_config)
+                                if tmp:
+                                    tmp = self._get_dsfield(tmp)
+                                    if af == 'ip':
+                                        filter_cmd += f' match {tc_af} dsfield {tmp} 0xff'
+                                    elif af == 'ipv6':
+                                        filter_cmd += f' match u16 {tmp} 0x0ff0 at 0'
 
                                 # Will match against total length of an IPv4 packet and
                                 # payload length of an IPv6 packet.
@@ -236,67 +293,79 @@ class QoSBase:
                                     elif af == 'ipv6':
                                         filter_cmd += f' match u8 {mask} {mask} at 53'
 
+                                cls = int(cls)
+                                filter_cmd += f' flowid {self._parent:x}:{cls:x}'
+                                self._cmd(filter_cmd)
+
                 else:
 
                     filter_cmd += ' basic'
 
+                    cls = int(cls)
+                    filter_cmd += f' flowid {self._parent:x}:{cls:x}'
+                    self._cmd(filter_cmd)
+
+
                 # The police block allows limiting of the byte or packet rate of
                 # traffic matched by the filter it is attached to.
                 # https://man7.org/linux/man-pages/man8/tc-police.8.html
-                if any(tmp in ['exceed', 'bandwidth', 'burst'] for tmp in cls_config):
-                    filter_cmd += f' action police'
 
-                if 'exceed' in cls_config:
-                    action = cls_config['exceed']
-                    filter_cmd += f' conform-exceed {action}'
-                    if 'not_exceed' in cls_config:
-                        action = cls_config['not_exceed']
-                        filter_cmd += f'/{action}'
-
-                if 'bandwidth' in cls_config:
-                    rate = self._rate_convert(cls_config['bandwidth'])
-                    filter_cmd += f' rate {rate}'
-
-                if 'burst' in cls_config:
-                    burst = cls_config['burst']
-                    filter_cmd += f' burst {burst}'
-
-                cls = int(cls)
-                filter_cmd += f' flowid {self._parent:x}:{cls:x}'
-                self._cmd(filter_cmd)
+                # T5295: We do not handle rate via tc filter directly,
+                # but rather set the tc filter to direct traffic to the correct tc class flow.
+                #
+                # if any(tmp in ['exceed', 'bandwidth', 'burst'] for tmp in cls_config):
+                #     filter_cmd += f' action police'
+                #
+                # if 'exceed' in cls_config:
+                #     action = cls_config['exceed']
+                #     filter_cmd += f' conform-exceed {action}'
+                #     if 'not_exceed' in cls_config:
+                #         action = cls_config['not_exceed']
+                #         filter_cmd += f'/{action}'
+                #
+                # if 'bandwidth' in cls_config:
+                #     rate = self._rate_convert(cls_config['bandwidth'])
+                #     filter_cmd += f' rate {rate}'
+                #
+                # if 'burst' in cls_config:
+                #     burst = cls_config['burst']
+                #     filter_cmd += f' burst {burst}'
 
         if 'default' in config:
+            default_cls_id = 1
             if 'class' in config:
                 class_id_max = self._get_class_max_id(config)
                 default_cls_id = int(class_id_max) +1
-                self._build_base_qdisc(config['default'], default_cls_id)
+            self._build_base_qdisc(config['default'], default_cls_id)
 
-            filter_cmd = f'tc filter replace dev {self._interface} parent {self._parent:x}: '
-            filter_cmd += 'prio 255 protocol all basic'
+        if self.qostype == 'limiter':
+            if 'default' in config:
+                filter_cmd = f'tc filter replace dev {self._interface} parent {self._parent:x}: '
+                filter_cmd += 'prio 255 protocol all basic'
 
-            # The police block allows limiting of the byte or packet rate of
-            # traffic matched by the filter it is attached to.
-            # https://man7.org/linux/man-pages/man8/tc-police.8.html
-            if any(tmp in ['exceed', 'bandwidth', 'burst'] for tmp in config['default']):
-                filter_cmd += f' action police'
+                # The police block allows limiting of the byte or packet rate of
+                # traffic matched by the filter it is attached to.
+                # https://man7.org/linux/man-pages/man8/tc-police.8.html
+                if any(tmp in ['exceed', 'bandwidth', 'burst'] for tmp in
+                       config['default']):
+                    filter_cmd += f' action police'
 
-            if 'exceed' in config['default']:
-                action = config['default']['exceed']
-                filter_cmd += f' conform-exceed {action}'
-                if 'not_exceed' in config['default']:
-                    action = config['default']['not_exceed']
-                    filter_cmd += f'/{action}'
+                if 'exceed' in config['default']:
+                    action = config['default']['exceed']
+                    filter_cmd += f' conform-exceed {action}'
+                    if 'not_exceed' in config['default']:
+                        action = config['default']['not_exceed']
+                        filter_cmd += f'/{action}'
 
-            if 'bandwidth' in config['default']:
-                rate = self._rate_convert(config['default']['bandwidth'])
-                filter_cmd += f' rate {rate}'
+                if 'bandwidth' in config['default']:
+                    rate = self._rate_convert(config['default']['bandwidth'])
+                    filter_cmd += f' rate {rate}'
 
-            if 'burst' in config['default']:
-                burst = config['default']['burst']
-                filter_cmd += f' burst {burst}'
+                if 'burst' in config['default']:
+                    burst = config['default']['burst']
+                    filter_cmd += f' burst {burst}'
 
-            if 'class' in config:
-                filter_cmd += f' flowid {self._parent:x}:{default_cls_id:x}'
+                if 'class' in config:
+                    filter_cmd += f' flowid {self._parent:x}:{default_cls_id:x}'
 
-            self._cmd(filter_cmd)
-
+                self._cmd(filter_cmd)

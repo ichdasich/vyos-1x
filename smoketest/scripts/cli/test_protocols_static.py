@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2021-2022 VyOS maintainers and contributors
+# Copyright (C) 2021-2023 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -20,7 +20,7 @@ from base_vyostest_shim import VyOSUnitTestSHIM
 
 from vyos.configsession import ConfigSessionError
 from vyos.template import is_ipv6
-from vyos.util import get_interface_config
+from vyos.utils.network import get_interface_config
 
 base_path = ['protocols', 'static']
 vrf_path =  ['protocols', 'vrf']
@@ -31,6 +31,8 @@ routes = {
             '192.0.2.100' : { 'distance' : '100' },
             '192.0.2.110' : { 'distance' : '110', 'interface' : 'eth0' },
             '192.0.2.120' : { 'distance' : '120', 'disable' : '' },
+            '192.0.2.130' : { 'bfd' : '' },
+            '192.0.2.140' : { 'bfd_source' : '192.0.2.10' },
         },
         'interface' : {
             'eth0'  : { 'distance' : '130' },
@@ -67,6 +69,8 @@ routes = {
             '2001:db8::1' : { 'distance' : '10' },
             '2001:db8::2' : { 'distance' : '20', 'interface' : 'eth0' },
             '2001:db8::3' : { 'distance' : '30', 'disable' : '' },
+            '2001:db8::4' : { 'bfd' : '' },
+            '2001:db8::5' : { 'bfd_source' : '2001:db8::ffff' },
         },
         'interface' : {
             'eth0'  : { 'distance' : '40', 'vrf' : 'black' },
@@ -95,6 +99,7 @@ class TestProtocolsStatic(VyOSUnitTestSHIM.TestCase):
     @classmethod
     def setUpClass(cls):
         super(TestProtocolsStatic, cls).setUpClass()
+        cls.cli_delete(cls, ['vrf'])
         cls.cli_set(cls, ['vrf', 'name', 'black', 'table', '43210'])
 
     @classmethod
@@ -116,6 +121,7 @@ class TestProtocolsStatic(VyOSUnitTestSHIM.TestCase):
         self.cli_commit()
 
     def test_01_static(self):
+        bfd_profile = 'vyos-test'
         for route, route_config in routes.items():
             route_type = 'route'
             if is_ipv6(route):
@@ -132,6 +138,10 @@ class TestProtocolsStatic(VyOSUnitTestSHIM.TestCase):
                         self.cli_set(base + ['next-hop', next_hop, 'interface', next_hop_config['interface']])
                     if 'vrf' in next_hop_config:
                         self.cli_set(base + ['next-hop', next_hop, 'vrf', next_hop_config['vrf']])
+                    if 'bfd' in next_hop_config:
+                        self.cli_set(base + ['next-hop', next_hop, 'bfd', 'profile', bfd_profile ])
+                    if 'bfd_source' in next_hop_config:
+                        self.cli_set(base + ['next-hop', next_hop, 'bfd', 'multi-hop', 'source', next_hop_config['bfd_source'], 'profile', bfd_profile])
 
 
             if 'interface' in route_config:
@@ -186,6 +196,10 @@ class TestProtocolsStatic(VyOSUnitTestSHIM.TestCase):
                         tmp += ' ' + next_hop_config['distance']
                     if 'vrf' in next_hop_config:
                         tmp += ' nexthop-vrf ' + next_hop_config['vrf']
+                    if 'bfd' in next_hop_config:
+                        tmp += ' bfd profile ' + bfd_profile
+                    if 'bfd_source' in next_hop_config:
+                        tmp += ' bfd multi-hop source ' + next_hop_config['bfd_source'] + ' profile ' + bfd_profile
 
                     if 'disable' in next_hop_config:
                         self.assertNotIn(tmp, frrconfig)
@@ -432,31 +446,6 @@ class TestProtocolsStatic(VyOSUnitTestSHIM.TestCase):
                         tmp += ' ' + route_config['blackhole']['distance']
 
                     self.assertIn(tmp, frrconfig)
-
-    def test_04_static_zebra_route_map(self):
-        # Implemented because of T3328
-        route_map = 'foo-static-in'
-        self.cli_set(['policy', 'route-map', route_map, 'rule', '10', 'action', 'permit'])
-
-        self.cli_set(base_path + ['route-map', route_map])
-        # commit changes
-        self.cli_commit()
-
-        # Verify FRR configuration
-        zebra_route_map = f'ip protocol static route-map {route_map}'
-        frrconfig = self.getFRRconfig(zebra_route_map)
-        self.assertIn(zebra_route_map, frrconfig)
-
-        # Remove the route-map again
-        self.cli_delete(base_path + ['route-map'])
-        # commit changes
-        self.cli_commit()
-
-        # Verify FRR configuration
-        frrconfig = self.getFRRconfig(zebra_route_map)
-        self.assertNotIn(zebra_route_map, frrconfig)
-
-        self.cli_delete(['policy', 'route-map', route_map])
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

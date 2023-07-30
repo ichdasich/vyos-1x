@@ -109,6 +109,7 @@ ENV/
 templates-cfg/*
 templates-op/*
 tests/templates/*
+xml_cache/*
 
 # Debian packaging
 debian/files
@@ -133,8 +134,15 @@ debian/*.substvars
 *.vpwhist
 *.vtg
 
+# VS Code
+.vscode/*
+!.vscode/settings.json
+
 # VIM
 *.swp
 
 # vyos-1x JSON version
 data/component-versions.json
+# vyos-1x XML cache
+python/vyos/xml_ref/cache.py
+python/vyos/xml_ref/pkg_cache/*_cache.py

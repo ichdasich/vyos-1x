@@ -19,9 +19,9 @@ A library for retrieving value dicts from VyOS configs in a declarative fashion.
 import os
 import json
 
-from vyos.util import dict_search
+from vyos.utils.dict import dict_search
 from vyos.xml import defaults
-from vyos.util import cmd
+from vyos.utils.process import cmd
 
 def retrieve_config(path_hash, base_path, config):
     """
@@ -389,7 +389,7 @@ def get_pppoe_interfaces(conf, vrf=None):
 
     return pppoe_interfaces
 
-def get_interface_dict(config, base, ifname=''):
+def get_interface_dict(config, base, ifname='', recursive_defaults=True):
     """
     Common utility function to retrieve and mangle the interfaces configuration
     from the CLI input nodes. All interfaces have a common base where value
@@ -405,46 +405,23 @@ def get_interface_dict(config, base, ifname=''):
             raise ConfigError('Interface (VYOS_TAGNODE_VALUE) not specified')
         ifname = os.environ['VYOS_TAGNODE_VALUE']
 
-    # retrieve interface default values
-    default_values = defaults(base)
-
-    # We take care about VLAN (vif, vif-s, vif-c) default values later on when
-    # parsing vlans in default dict and merge the "proper" values in correctly,
-    # see T2665.
-    for vif in ['vif', 'vif_s']:
-        if vif in default_values: del default_values[vif]
-
-    dict = config.get_config_dict(base + [ifname], key_mangling=('-', '_'),
-                                  get_first_key=True,
-                                  no_tag_node_value_mangle=True)
-
     # Check if interface has been removed. We must use exists() as
     # get_config_dict() will always return {} - even when an empty interface
     # node like the following exists.
     # +macsec macsec1 {
     # +}
     if not config.exists(base + [ifname]):
+        dict = config.get_config_dict(base + [ifname], key_mangling=('-', '_'),
+                                      get_first_key=True,
+                                      no_tag_node_value_mangle=True)
         dict.update({'deleted' : {}})
-
-    # Add interface instance name into dictionary
-    dict.update({'ifname': ifname})
-
-    # Check if QoS policy applied on this interface - See ifconfig.interface.set_mirror_redirect()
-    if config.exists(['qos', 'interface', ifname]):
-        dict.update({'traffic_policy': {}})
-
-    # XXX: T2665: When there is no DHCPv6-PD configuration given, we can safely
-    # remove the default values from the dict.
-    if 'dhcpv6_options' not in dict:
-        if 'dhcpv6_options' in default_values:
-            del default_values['dhcpv6_options']
-
-    # We have gathered the dict representation of the CLI, but there are
-    # default options which we need to update into the dictionary retrived.
-    # But we should only add them when interface is not deleted - as this might
-    # confuse parsers
-    if 'deleted' not in dict:
-        dict = dict_merge(default_values, dict)
+    else:
+        # Get config_dict with default values
+        dict = config.get_config_dict(base + [ifname], key_mangling=('-', '_'),
+                                      get_first_key=True,
+                                      no_tag_node_value_mangle=True,
+                                      with_defaults=True,
+                                      with_recursive_defaults=recursive_defaults)
 
         # If interface does not request an IPv4 DHCP address there is no need
         # to keep the dhcp-options key
@@ -452,8 +429,12 @@ def get_interface_dict(config, base, ifname=''):
             if 'dhcp_options' in dict:
                 del dict['dhcp_options']
 
-    # XXX: T2665: blend in proper DHCPv6-PD default values
-    dict = T2665_set_dhcpv6pd_defaults(dict)
+    # Add interface instance name into dictionary
+    dict.update({'ifname': ifname})
+
+    # Check if QoS policy applied on this interface - See ifconfig.interface.set_mirror_redirect()
+    if config.exists(['qos', 'interface', ifname]):
+        dict.update({'traffic_policy': {}})
 
     address = leaf_node_changed(config, base + [ifname, 'address'])
     if address: dict.update({'address_old' : address})
@@ -497,9 +478,6 @@ def get_interface_dict(config, base, ifname=''):
         else:
             dict['ipv6']['address'].update({'eui64_old': eui64})
 
-    # Implant default dictionary in vif/vif-s VLAN interfaces. Values are
-    # identical for all types of VLAN interfaces as they all include the same
-    # XML definitions which hold the defaults.
     for vif, vif_config in dict.get('vif', {}).items():
         # Add subinterface name to dictionary
         dict['vif'][vif].update({'ifname' : f'{ifname}.{vif}'})
@@ -507,21 +485,9 @@ def get_interface_dict(config, base, ifname=''):
         if config.exists(['qos', 'interface', f'{ifname}.{vif}']):
             dict['vif'][vif].update({'traffic_policy': {}})
 
-        default_vif_values = defaults(base + ['vif'])
-        # XXX: T2665: When there is no DHCPv6-PD configuration given, we can safely
-        # remove the default values from the dict.
-        if not 'dhcpv6_options' in vif_config:
-            del default_vif_values['dhcpv6_options']
-
-        # Only add defaults if interface is not about to be deleted - this is
-        # to keep a cleaner config dict.
         if 'deleted' not in dict:
             address = leaf_node_changed(config, base + [ifname, 'vif', vif, 'address'])
             if address: dict['vif'][vif].update({'address_old' : address})
-
-            dict['vif'][vif] = dict_merge(default_vif_values, dict['vif'][vif])
-            # XXX: T2665: blend in proper DHCPv6-PD default values
-            dict['vif'][vif] = T2665_set_dhcpv6pd_defaults(dict['vif'][vif])
 
             # If interface does not request an IPv4 DHCP address there is no need
             # to keep the dhcp-options key
@@ -544,25 +510,9 @@ def get_interface_dict(config, base, ifname=''):
         if config.exists(['qos', 'interface', f'{ifname}.{vif_s}']):
             dict['vif_s'][vif_s].update({'traffic_policy': {}})
 
-        default_vif_s_values = defaults(base + ['vif-s'])
-        # XXX: T2665: we only wan't the vif-s defaults - do not care about vif-c
-        if 'vif_c' in default_vif_s_values: del default_vif_s_values['vif_c']
-
-        # XXX: T2665: When there is no DHCPv6-PD configuration given, we can safely
-        # remove the default values from the dict.
-        if not 'dhcpv6_options' in vif_s_config:
-            del default_vif_s_values['dhcpv6_options']
-
-        # Only add defaults if interface is not about to be deleted - this is
-        # to keep a cleaner config dict.
         if 'deleted' not in dict:
             address = leaf_node_changed(config, base + [ifname, 'vif-s', vif_s, 'address'])
             if address: dict['vif_s'][vif_s].update({'address_old' : address})
-
-            dict['vif_s'][vif_s] = dict_merge(default_vif_s_values,
-                    dict['vif_s'][vif_s])
-            # XXX: T2665: blend in proper DHCPv6-PD default values
-            dict['vif_s'][vif_s] = T2665_set_dhcpv6pd_defaults(dict['vif_s'][vif_s])
 
             # If interface does not request an IPv4 DHCP address there is no need
             # to keep the dhcp-options key
@@ -586,25 +536,10 @@ def get_interface_dict(config, base, ifname=''):
             if config.exists(['qos', 'interface', f'{ifname}.{vif_s}.{vif_c}']):
                 dict['vif_s'][vif_s]['vif_c'][vif_c].update({'traffic_policy': {}})
 
-            default_vif_c_values = defaults(base + ['vif-s', 'vif-c'])
-
-            # XXX: T2665: When there is no DHCPv6-PD configuration given, we can safely
-            # remove the default values from the dict.
-            if not 'dhcpv6_options' in vif_c_config:
-                del default_vif_c_values['dhcpv6_options']
-
-            # Only add defaults if interface is not about to be deleted - this is
-            # to keep a cleaner config dict.
             if 'deleted' not in dict:
                 address = leaf_node_changed(config, base + [ifname, 'vif-s', vif_s, 'vif-c', vif_c, 'address'])
                 if address: dict['vif_s'][vif_s]['vif_c'][vif_c].update(
                         {'address_old' : address})
-
-                dict['vif_s'][vif_s]['vif_c'][vif_c] = dict_merge(
-                    default_vif_c_values, dict['vif_s'][vif_s]['vif_c'][vif_c])
-                # XXX: T2665: blend in proper DHCPv6-PD default values
-                dict['vif_s'][vif_s]['vif_c'][vif_c] = T2665_set_dhcpv6pd_defaults(
-                    dict['vif_s'][vif_s]['vif_c'][vif_c])
 
                 # If interface does not request an IPv4 DHCP address there is no need
                 # to keep the dhcp-options key
@@ -655,45 +590,13 @@ def get_accel_dict(config, base, chap_secrets):
 
     Return a dictionary with the necessary interface config keys.
     """
-    from vyos.util import get_half_cpus
+    from vyos.utils.system import get_half_cpus
     from vyos.template import is_ipv4
 
     dict = config.get_config_dict(base, key_mangling=('-', '_'),
                                   get_first_key=True,
-                                  no_tag_node_value_mangle=True)
-
-    # We have gathered the dict representation of the CLI, but there are default
-    # options which we need to update into the dictionary retrived.
-    default_values = defaults(base)
-
-    # T2665: defaults include RADIUS server specifics per TAG node which need to
-    # be added to individual RADIUS servers instead - so we can simply delete them
-    if dict_search('authentication.radius.server', default_values):
-        del default_values['authentication']['radius']['server']
-
-    # T2665: defaults include static-ip address per TAG node which need to be
-    # added to individual local users instead - so we can simply delete them
-    if dict_search('authentication.local_users.username', default_values):
-        del default_values['authentication']['local_users']['username']
-
-    # T2665: defaults include IPv6 client-pool mask per TAG node which need to be
-    # added to individual local users instead - so we can simply delete them
-    if dict_search('client_ipv6_pool.prefix.mask', default_values):
-        del default_values['client_ipv6_pool']['prefix']['mask']
-        # delete empty dicts
-        if len (default_values['client_ipv6_pool']['prefix']) == 0:
-            del default_values['client_ipv6_pool']['prefix']
-        if len (default_values['client_ipv6_pool']) == 0:
-            del default_values['client_ipv6_pool']
-
-    # T2665: IPoE only - it has an interface tag node
-    # added to individual local users instead - so we can simply delete them
-    if dict_search('authentication.interface', default_values):
-        del default_values['authentication']['interface']
-    if dict_search('interface', default_values):
-        del default_values['interface']
-
-    dict = dict_merge(default_values, dict)
+                                  no_tag_node_value_mangle=True,
+                                  with_recursive_defaults=True)
 
     # set CPUs cores to process requests
     dict.update({'thread_count' : get_half_cpus()})
@@ -713,43 +616,9 @@ def get_accel_dict(config, base, chap_secrets):
         dict.update({'name_server_ipv4' : ns_v4, 'name_server_ipv6' : ns_v6})
         del dict['name_server']
 
-    # T2665: Add individual RADIUS server default values
-    if dict_search('authentication.radius.server', dict):
-        default_values = defaults(base + ['authentication', 'radius', 'server'])
-        for server in dict_search('authentication.radius.server', dict):
-            dict['authentication']['radius']['server'][server] = dict_merge(
-                default_values, dict['authentication']['radius']['server'][server])
-
-            # Check option "disable-accounting" per server and replace default value from '1813' to '0'
-            # set vpn sstp authentication radius server x.x.x.x disable-accounting
-            if 'disable_accounting' in dict['authentication']['radius']['server'][server]:
-                dict['authentication']['radius']['server'][server]['acct_port'] = '0'
-
-    # T2665: Add individual local-user default values
-    if dict_search('authentication.local_users.username', dict):
-        default_values = defaults(base + ['authentication', 'local-users', 'username'])
-        for username in dict_search('authentication.local_users.username', dict):
-            dict['authentication']['local_users']['username'][username] = dict_merge(
-                default_values, dict['authentication']['local_users']['username'][username])
-
-    # T2665: Add individual IPv6 client-pool default mask if required
-    if dict_search('client_ipv6_pool.prefix', dict):
-        default_values = defaults(base + ['client-ipv6-pool', 'prefix'])
-        for prefix in dict_search('client_ipv6_pool.prefix', dict):
-            dict['client_ipv6_pool']['prefix'][prefix] = dict_merge(
-                default_values, dict['client_ipv6_pool']['prefix'][prefix])
-
-    # T2665: IPoE only - add individual local-user default values
-    if dict_search('authentication.interface', dict):
-        default_values = defaults(base + ['authentication', 'interface'])
-        for interface in dict_search('authentication.interface', dict):
-            dict['authentication']['interface'][interface] = dict_merge(
-                default_values, dict['authentication']['interface'][interface])
-
-    if dict_search('interface', dict):
-        default_values = defaults(base + ['interface'])
-        for interface in dict_search('interface', dict):
-            dict['interface'][interface] = dict_merge(default_values,
-                                                      dict['interface'][interface])
+    # Check option "disable-accounting" per server and replace default value from '1813' to '0'
+    for server in (dict_search('authentication.radius.server', dict) or []):
+        if 'disable_accounting' in dict['authentication']['radius']['server'][server]:
+            dict['authentication']['radius']['server'][server]['acct_port'] = '0'
 
     return dict

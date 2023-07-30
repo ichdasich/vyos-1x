@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2018-2022 VyOS maintainers and contributors
+# Copyright (C) 2018-2023 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -18,18 +18,16 @@ import os
 import re
 
 from sys import exit
-import ipaddress
-
 from ipaddress import ip_address
 
 from vyos.base import Warning
 from vyos.config import Config
 from vyos.configdict import dict_merge
+from vyos.configverify import verify_vrf
 from vyos.ifconfig import Section
-from vyos.ifconfig import Interface
 from vyos.template import render
-from vyos.util import call
-from vyos.util import cmd
+from vyos.utils.process import call
+from vyos.utils.process import cmd
 from vyos.validate import is_addr_assigned
 from vyos.xml import defaults
 from vyos import ConfigError
@@ -194,6 +192,7 @@ def verify(flow_config):
                 sflow_collector_ipver = ip_address(server).version
 
         # check if vrf is defined for Sflow
+        verify_vrf(flow_config)
         sflow_vrf = None
         if 'vrf' in flow_config:
             sflow_vrf = flow_config['vrf']
@@ -211,7 +210,7 @@ def verify(flow_config):
             if not is_addr_assigned(tmp, sflow_vrf):
                 raise ConfigError(f'Configured "sflow agent-address {tmp}" does not exist in the system!')
 
-        # Check if configured netflow source-address exist in the system
+        # Check if configured sflow source-address exist in the system
         if 'source_address' in flow_config['sflow']:
             if not is_addr_assigned(flow_config['sflow']['source_address'], sflow_vrf):
                 tmp = flow_config['sflow']['source_address']
@@ -219,13 +218,18 @@ def verify(flow_config):
 
     # check NetFlow configuration
     if 'netflow' in flow_config:
+        # check if vrf is defined for netflow
+        netflow_vrf = None
+        if 'vrf' in flow_config:
+            netflow_vrf = flow_config['vrf']
+
         # check if at least one NetFlow collector is configured if NetFlow configuration is presented
         if 'server' not in flow_config['netflow']:
             raise ConfigError('You need to configure at least one NetFlow server!')
 
         # Check if configured netflow source-address exist in the system
         if 'source_address' in flow_config['netflow']:
-            if not is_addr_assigned(flow_config['netflow']['source_address']):
+            if not is_addr_assigned(flow_config['netflow']['source_address'], netflow_vrf):
                 tmp = flow_config['netflow']['source_address']
                 raise ConfigError(f'Configured "netflow source-address {tmp}" does not exist on the system!')
 

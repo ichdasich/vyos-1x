@@ -62,7 +62,7 @@ def is_intf_addr_assigned(intf, address) -> bool:
     # 10: [{'addr': 'fe80::a00:27ff:fed9:5b04%eth0', 'netmask': 'ffff:ffff:ffff:ffff::'}]
     # }
     try:
-        ifaces = ifaddresses(intf)
+        addresses = ifaddresses(intf)
     except ValueError as e:
         print(e)
         return False
@@ -74,7 +74,7 @@ def is_intf_addr_assigned(intf, address) -> bool:
     netmask = None
     if '/' in address:
         address, netmask = address.split('/')
-    for ip in ifaces.get(addr_type,[]):
+    for ip in addresses.get(addr_type, []):
         # ip can have the interface name in the 'addr' field, we need to remove it
         # {'addr': 'fe80::a00:27ff:fec5:f821%eth2', 'netmask': 'ffff:ffff:ffff:ffff::'}
         ip_addr = ip['addr'].split('%')[0]
@@ -98,10 +98,11 @@ def is_intf_addr_assigned(intf, address) -> bool:
     return False
 
 def is_addr_assigned(ip_address, vrf=None) -> bool:
-    """ Verify if the given IPv4/IPv6 address is assigned to any interfac """
+    """ Verify if the given IPv4/IPv6 address is assigned to any interface """
     from netifaces import interfaces
-    from vyos.util import get_interface_config
-    from vyos.util import dict_search
+    from vyos.utils.network import get_interface_config
+    from vyos.utils.dict import dict_search
+
     for interface in interfaces():
         # Check if interface belongs to the requested VRF, if this is not the
         # case there is no need to proceed with this data set - continue loop
@@ -114,6 +115,24 @@ def is_addr_assigned(ip_address, vrf=None) -> bool:
             return True
 
     return False
+
+def is_afi_configured(interface, afi):
+    """ Check if given address family is configured, or in other words - an IP
+    address is assigned to the interface. """
+    from netifaces import ifaddresses
+    from netifaces import AF_INET
+    from netifaces import AF_INET6
+
+    if afi not in [AF_INET, AF_INET6]:
+        raise ValueError('Address family must be in [AF_INET, AF_INET6]')
+
+    try:
+        addresses = ifaddresses(interface)
+    except ValueError as e:
+        print(e)
+        return False
+
+    return afi in addresses
 
 def is_loopback_addr(addr):
     """ Check if supplied IPv4/IPv6 address is a loopback address """
@@ -200,7 +219,7 @@ def assert_mtu(mtu, ifname):
     assert_number(mtu)
 
     import json
-    from vyos.util import cmd
+    from vyos.utils.process import cmd
     out = cmd(f'ip -j -d link show dev {ifname}')
     # [{"ifindex":2,"ifname":"eth0","flags":["BROADCAST","MULTICAST","UP","LOWER_UP"],"mtu":1500,"qdisc":"pfifo_fast","operstate":"UP","linkmode":"DEFAULT","group":"default","txqlen":1000,"link_type":"ether","address":"08:00:27:d9:5b:04","broadcast":"ff:ff:ff:ff:ff:ff","promiscuity":0,"min_mtu":46,"max_mtu":16110,"inet6_addr_gen_mode":"none","num_tx_queues":1,"num_rx_queues":1,"gso_max_size":65536,"gso_max_segs":65535}]
     parsed = json.loads(out)[0]

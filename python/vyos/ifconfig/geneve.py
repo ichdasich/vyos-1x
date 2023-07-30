@@ -14,7 +14,7 @@
 # License along with this library.  If not, see <http://www.gnu.org/licenses/>.
 
 from vyos.ifconfig import Interface
-from vyos.util import dict_search
+from vyos.utils.dict import dict_search
 
 @Interface.register
 class GeneveIf(Interface):
@@ -45,6 +45,7 @@ class GeneveIf(Interface):
             'parameters.ip.df'           : 'df',
             'parameters.ip.tos'          : 'tos',
             'parameters.ip.ttl'          : 'ttl',
+            'parameters.ip.innerproto'   : 'innerprotoinherit',
             'parameters.ipv6.flowlabel'  : 'flowlabel',
         }
 

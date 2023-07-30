@@ -28,9 +28,9 @@ from vyos.configsession import ConfigSessionError
 from vyos.ifconfig import Section
 from vyos.pki import CERT_BEGIN
 from vyos.template import is_ipv6
-from vyos.util import cmd
-from vyos.util import process_named_running
-from vyos.util import read_file
+from vyos.utils.process import cmd
+from vyos.utils.process import process_named_running
+from vyos.utils.file import read_file
 from vyos.validate import is_ipv6_link_local
 
 server_ca_root_cert_data = """
@@ -109,14 +109,6 @@ def get_certificate_count(interface, cert_type):
 class EthernetInterfaceTest(BasicInterfaceTest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls._test_dhcp = True
-        cls._test_ip = True
-        cls._test_ipv6 = True
-        cls._test_ipv6_pd = True
-        cls._test_ipv6_dhcpc6 = True
-        cls._test_mtu = True
-        cls._test_vlan = True
-        cls._test_qinq = True
         cls._base_path = ['interfaces', 'ethernet']
         cls._mirror_interfaces = ['dum21354']
 

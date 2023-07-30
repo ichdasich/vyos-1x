@@ -94,8 +94,7 @@
                 <description>IPv6 address to listen for incoming SNMP requests</description>
               </valueHelp>
               <constraint>
-                <validator name="ipv4-address"/>
-                <validator name="ipv6-address"/>
+                <validator name="ip-address"/>
               </constraint>
             </properties>
             <children>
@@ -143,7 +142,7 @@
               <multi/>
             </properties>
           </leafNode>
-          #include <include/snmp/protocol.xml.i>
+          #include <include/protocol-tcp-udp.xml.i>
           <leafNode name="smux-peer">
             <properties>
               <help>Register a subtree for SMUX-based processing</help>
@@ -166,8 +165,7 @@
                 <description>IPv6 address</description>
               </valueHelp>
               <constraint>
-                <validator name="ipv4-address"/>
-                <validator name="ipv6-address"/>
+                <validator name="ip-address"/>
               </constraint>
             </properties>
           </leafNode>
@@ -183,8 +181,7 @@
                 <description>IPv6 address</description>
               </valueHelp>
               <constraint>
-                <validator name="ipv4-address"/>
-                <validator name="ipv6-address"/>
+                <validator name="ip-address"/>
               </constraint>
             </properties>
             <children>
@@ -327,7 +324,7 @@
                       #include <include/snmp/privacy-type.xml.i>
                     </children>
                   </node>
-                  #include <include/snmp/protocol.xml.i>
+                  #include <include/protocol-tcp-udp.xml.i>
                   <leafNode name="type">
                     <properties>
                       <help>Specifies the type of notification between inform and trap</help>

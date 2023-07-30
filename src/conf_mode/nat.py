@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2020-2022 VyOS maintainers and contributors
+# Copyright (C) 2020-2023 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -28,11 +28,11 @@ from vyos.config import Config
 from vyos.configdict import dict_merge
 from vyos.template import render
 from vyos.template import is_ip_network
-from vyos.util import cmd
-from vyos.util import run
-from vyos.util import check_kmod
-from vyos.util import dict_search
-from vyos.util import dict_search_args
+from vyos.utils.kernel import check_kmod
+from vyos.utils.dict import dict_search
+from vyos.utils.dict import dict_search_args
+from vyos.utils.process import cmd
+from vyos.utils.process import run
 from vyos.validate import is_addr_assigned
 from vyos.xml import defaults
 from vyos import ConfigError
@@ -72,6 +72,7 @@ def verify_rule(config, err_msg, groups_dict):
     """ Common verify steps used for both source and destination NAT """
 
     if (dict_search('translation.port', config) != None or
+        dict_search('translation.redirect.port', config) != None or
         dict_search('destination.port', config) != None or
         dict_search('source.port', config)):
 
@@ -221,7 +222,7 @@ def verify(nat):
             elif config['inbound_interface'] not in 'any' and config['inbound_interface'] not in interfaces():
                 Warning(f'rule "{rule}" interface "{config["inbound_interface"]}" does not exist on this system')
 
-            if not dict_search('translation.address', config) and not dict_search('translation.port', config):
+            if not dict_search('translation.address', config) and not dict_search('translation.port', config) and not dict_search('translation.redirect.port', config):
                 if 'exclude' not in config:
                     raise ConfigError(f'{err_msg} translation requires address and/or port')
 

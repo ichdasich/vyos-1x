@@ -20,9 +20,9 @@ from base_vyostest_shim import VyOSUnitTestSHIM
 
 from vyos.configsession import ConfigSessionError
 from vyos.ifconfig.vrrp import VRRP
-from vyos.util import cmd
-from vyos.util import process_named_running
-from vyos.util import read_file
+from vyos.utils.process import cmd
+from vyos.utils.process import process_named_running
+from vyos.utils.file import read_file
 from vyos.template import inc_ip
 
 PROCESS_NAME = 'keepalived'
@@ -96,6 +96,7 @@ class TestVRRP(VyOSUnitTestSHIM.TestCase):
         group_garp_master_delay = '12'
         group_garp_master_repeat = '13'
         group_garp_master_refresh = '14'
+        vrrp_version = '3'
 
         for group in groups:
             vlan_id = group.lstrip('VLAN')
@@ -133,6 +134,7 @@ class TestVRRP(VyOSUnitTestSHIM.TestCase):
         self.cli_set(global_param_base + ['garp', 'master-repeat', f'{garp_master_repeat}'])
         self.cli_set(global_param_base + ['garp', 'master-refresh', f'{garp_master_refresh}'])
         self.cli_set(global_param_base + ['garp', 'master-refresh-repeat', f'{garp_master_refresh_repeat}'])
+        self.cli_set(global_param_base + ['version', vrrp_version])
 
         # commit changes
         self.cli_commit()
@@ -145,6 +147,7 @@ class TestVRRP(VyOSUnitTestSHIM.TestCase):
         self.assertIn(f'vrrp_garp_master_repeat {garp_master_repeat}', config)
         self.assertIn(f'vrrp_garp_master_refresh {garp_master_refresh}', config)
         self.assertIn(f'vrrp_garp_master_refresh_repeat {garp_master_refresh_repeat}', config)
+        self.assertIn(f'vrrp_version {vrrp_version}', config)
 
         for group in groups:
             vlan_id = group.lstrip('VLAN')

@@ -1,4 +1,4 @@
-# Copyright (C) 2019-2022 VyOS maintainers and contributors
+# Copyright (C) 2019-2023 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -28,13 +28,14 @@ from vyos.configsession import ConfigSession
 from vyos.configsession import ConfigSessionError
 from vyos.ifconfig import Interface
 from vyos.ifconfig import Section
-from vyos.util import read_file
-from vyos.util import cmd
-from vyos.util import dict_search
-from vyos.util import process_named_running
-from vyos.util import get_interface_config
+from vyos.utils.file import read_file
+from vyos.utils.dict import dict_search
+from vyos.utils.process import process_named_running
+from vyos.utils.network import get_interface_config
+from vyos.utils.process import cmd
 from vyos.validate import is_intf_addr_assigned
 from vyos.validate import is_ipv6_link_local
+from vyos.xml_ref import cli_defined
 
 def is_mirrored_to(interface, mirror_if, qdisc):
     """
@@ -82,6 +83,17 @@ class BasicInterfaceTest:
         def setUpClass(cls):
             super(BasicInterfaceTest.TestCase, cls).setUpClass()
 
+            # XXX the case of test_vif_8021q_mtu_limits, below, shows that
+            # we should extend cli_defined to support more complex queries
+            cls._test_vlan = cli_defined(cls._base_path, 'vif')
+            cls._test_qinq = cli_defined(cls._base_path, 'vif-s')
+            cls._test_dhcp = cli_defined(cls._base_path, 'dhcp-options')
+            cls._test_ip = cli_defined(cls._base_path, 'ip')
+            cls._test_ipv6 = cli_defined(cls._base_path, 'ipv6')
+            cls._test_ipv6_dhcpc6 = cli_defined(cls._base_path, 'dhcpv6-options')
+            cls._test_ipv6_pd = cli_defined(cls._base_path + ['dhcpv6-options'], 'pd')
+            cls._test_mtu = cli_defined(cls._base_path, 'mtu')
+
             # Setup mirror interfaces for SPAN (Switch Port Analyzer)
             for span in cls._mirror_interfaces:
                 section = Section.section(span)
@@ -104,9 +116,15 @@ class BasicInterfaceTest:
             for intf in self._interfaces:
                 self.assertNotIn(intf, interfaces())
 
-            # No daemon that was started during a test should remain running
+            # No daemon started during tests should remain running
             for daemon in ['dhcp6c', 'dhclient']:
-                self.assertFalse(process_named_running(daemon))
+                # if _interface list is populated do a more fine grained search
+                # by also checking the cmd arguments passed to the daemon
+                if self._interfaces:
+                    for tmp in self._interfaces:
+                        self.assertFalse(process_named_running(daemon, tmp))
+                else:
+                    self.assertFalse(process_named_running(daemon))
 
         def test_dhcp_disable_interface(self):
             if not self._test_dhcp:
@@ -360,7 +378,7 @@ class BasicInterfaceTest:
             # is the Wireless test will first load the wifi kernel hwsim module
             # which creates a wlan0 and wlan1 interface which will fail the
             # tearDown() test in the end that no interface is allowed to survive!
-            if not self._test_vlan:
+            if not self._test_vlan or not self._test_mtu:
                 self.skipTest('not supported')
 
             mtu_1500 = '1500'
@@ -634,58 +652,90 @@ class BasicInterfaceTest:
                     self.cli_set(path + option.split())
 
                 # Options
-                self.cli_set(path + ['ip', 'adjust-mss', mss])
-                self.cli_set(path + ['ip', 'arp-cache-timeout', arp_tmo])
-                self.cli_set(path + ['ip', 'disable-arp-filter'])
-                self.cli_set(path + ['ip', 'disable-forwarding'])
-                self.cli_set(path + ['ip', 'enable-directed-broadcast'])
-                self.cli_set(path + ['ip', 'enable-arp-accept'])
-                self.cli_set(path + ['ip', 'enable-arp-announce'])
-                self.cli_set(path + ['ip', 'enable-arp-ignore'])
-                self.cli_set(path + ['ip', 'enable-proxy-arp'])
-                self.cli_set(path + ['ip', 'proxy-arp-pvlan'])
-                self.cli_set(path + ['ip', 'source-validation', 'loose'])
+                if cli_defined(self._base_path + ['ip'], 'adjust-mss'):
+                    self.cli_set(path + ['ip', 'adjust-mss', mss])
+
+                if cli_defined(self._base_path + ['ip'], 'arp-cache-timeout'):
+                    self.cli_set(path + ['ip', 'arp-cache-timeout', arp_tmo])
+
+                if cli_defined(self._base_path + ['ip'], 'disable-arp-filter'):
+                    self.cli_set(path + ['ip', 'disable-arp-filter'])
+
+                if cli_defined(self._base_path + ['ip'], 'disable-forwarding'):
+                    self.cli_set(path + ['ip', 'disable-forwarding'])
+
+                if cli_defined(self._base_path + ['ip'], 'enable-directed-broadcast'):
+                    self.cli_set(path + ['ip', 'enable-directed-broadcast'])
+
+                if cli_defined(self._base_path + ['ip'], 'enable-arp-accept'):
+                    self.cli_set(path + ['ip', 'enable-arp-accept'])
+
+                if cli_defined(self._base_path + ['ip'], 'enable-arp-announce'):
+                    self.cli_set(path + ['ip', 'enable-arp-announce'])
+
+                if cli_defined(self._base_path + ['ip'], 'enable-arp-ignore'):
+                    self.cli_set(path + ['ip', 'enable-arp-ignore'])
+
+                if cli_defined(self._base_path + ['ip'], 'enable-proxy-arp'):
+                    self.cli_set(path + ['ip', 'enable-proxy-arp'])
+
+                if cli_defined(self._base_path + ['ip'], 'proxy-arp-pvlan'):
+                    self.cli_set(path + ['ip', 'proxy-arp-pvlan'])
+
+                if cli_defined(self._base_path + ['ip'], 'source-validation'):
+                    self.cli_set(path + ['ip', 'source-validation', 'loose'])
 
             self.cli_commit()
 
             for interface in self._interfaces:
-                base_options = f'oifname "{interface}"'
-                out = cmd('sudo nft list chain raw VYOS_TCP_MSS')
-                for line in out.splitlines():
-                    if line.startswith(base_options):
-                        self.assertIn(f'tcp option maxseg size set {mss}', line)
+                if cli_defined(self._base_path + ['ip'], 'adjust-mss'):
+                    base_options = f'oifname "{interface}"'
+                    out = cmd('sudo nft list chain raw VYOS_TCP_MSS')
+                    for line in out.splitlines():
+                        if line.startswith(base_options):
+                            self.assertIn(f'tcp option maxseg size set {mss}', line)
 
-                tmp = read_file(f'/proc/sys/net/ipv4/neigh/{interface}/base_reachable_time_ms')
-                self.assertEqual(tmp, str((int(arp_tmo) * 1000))) # tmo value is in milli seconds
+                if cli_defined(self._base_path + ['ip'], 'arp-cache-timeout'):
+                    tmp = read_file(f'/proc/sys/net/ipv4/neigh/{interface}/base_reachable_time_ms')
+                    self.assertEqual(tmp, str((int(arp_tmo) * 1000))) # tmo value is in milli seconds
 
                 proc_base = f'/proc/sys/net/ipv4/conf/{interface}'
 
-                tmp = read_file(f'{proc_base}/arp_filter')
-                self.assertEqual('0', tmp)
+                if cli_defined(self._base_path + ['ip'], 'disable-arp-filter'):
+                    tmp = read_file(f'{proc_base}/arp_filter')
+                    self.assertEqual('0', tmp)
 
-                tmp = read_file(f'{proc_base}/arp_accept')
-                self.assertEqual('1', tmp)
+                if cli_defined(self._base_path + ['ip'], 'enable-arp-accept'):
+                    tmp = read_file(f'{proc_base}/arp_accept')
+                    self.assertEqual('1', tmp)
 
-                tmp = read_file(f'{proc_base}/arp_announce')
-                self.assertEqual('1', tmp)
+                if cli_defined(self._base_path + ['ip'], 'enable-arp-announce'):
+                    tmp = read_file(f'{proc_base}/arp_announce')
+                    self.assertEqual('1', tmp)
 
-                tmp = read_file(f'{proc_base}/arp_ignore')
-                self.assertEqual('1', tmp)
+                if cli_defined(self._base_path + ['ip'], 'enable-arp-ignore'):
+                    tmp = read_file(f'{proc_base}/arp_ignore')
+                    self.assertEqual('1', tmp)
 
-                tmp = read_file(f'{proc_base}/forwarding')
-                self.assertEqual('0', tmp)
+                if cli_defined(self._base_path + ['ip'], 'disable-forwarding'):
+                    tmp = read_file(f'{proc_base}/forwarding')
+                    self.assertEqual('0', tmp)
 
-                tmp = read_file(f'{proc_base}/bc_forwarding')
-                self.assertEqual('1', tmp)
+                if cli_defined(self._base_path + ['ip'], 'enable-directed-broadcast'):
+                    tmp = read_file(f'{proc_base}/bc_forwarding')
+                    self.assertEqual('1', tmp)
 
-                tmp = read_file(f'{proc_base}/proxy_arp')
-                self.assertEqual('1', tmp)
+                if cli_defined(self._base_path + ['ip'], 'enable-proxy-arp'):
+                    tmp = read_file(f'{proc_base}/proxy_arp')
+                    self.assertEqual('1', tmp)
 
-                tmp = read_file(f'{proc_base}/proxy_arp_pvlan')
-                self.assertEqual('1', tmp)
+                if cli_defined(self._base_path + ['ip'], 'proxy-arp-pvlan'):
+                    tmp = read_file(f'{proc_base}/proxy_arp_pvlan')
+                    self.assertEqual('1', tmp)
 
-                tmp = read_file(f'{proc_base}/rp_filter')
-                self.assertEqual('2', tmp)
+                if cli_defined(self._base_path + ['ip'], 'source-validation'):
+                    tmp = read_file(f'{proc_base}/rp_filter')
+                    self.assertEqual('2', tmp)
 
         def test_interface_ipv6_options(self):
             if not self._test_ipv6:
@@ -700,26 +750,33 @@ class BasicInterfaceTest:
                     self.cli_set(path + option.split())
 
                 # Options
-                self.cli_set(path + ['ipv6', 'adjust-mss', mss])
-                self.cli_set(path + ['ipv6', 'disable-forwarding'])
-                self.cli_set(path + ['ipv6', 'dup-addr-detect-transmits', dad_transmits])
+                if cli_defined(self._base_path + ['ipv6'], 'adjust-mss'):
+                    self.cli_set(path + ['ipv6', 'adjust-mss', mss])
+
+                if cli_defined(self._base_path + ['ipv6'], 'dup-addr-detect-transmits'):
+                    self.cli_set(path + ['ipv6', 'dup-addr-detect-transmits', dad_transmits])
+
+                if cli_defined(self._base_path + ['ipv6'], 'disable-forwarding'):
+                    self.cli_set(path + ['ipv6', 'disable-forwarding'])
 
             self.cli_commit()
 
             for interface in self._interfaces:
-                base_options = f'oifname "{interface}"'
-                out = cmd('sudo nft list chain ip6 raw VYOS_TCP_MSS')
-                for line in out.splitlines():
-                    if line.startswith(base_options):
-                        self.assertIn(f'tcp option maxseg size set {mss}', line)
-
                 proc_base = f'/proc/sys/net/ipv6/conf/{interface}'
+                if cli_defined(self._base_path + ['ipv6'], 'adjust-mss'):
+                    base_options = f'oifname "{interface}"'
+                    out = cmd('sudo nft list chain ip6 raw VYOS_TCP_MSS')
+                    for line in out.splitlines():
+                        if line.startswith(base_options):
+                            self.assertIn(f'tcp option maxseg size set {mss}', line)
 
-                tmp = read_file(f'{proc_base}/forwarding')
-                self.assertEqual('0', tmp)
+                if cli_defined(self._base_path + ['ipv6'], 'dup-addr-detect-transmits'):
+                    tmp = read_file(f'{proc_base}/dad_transmits')
+                    self.assertEqual(dad_transmits, tmp)
 
-                tmp = read_file(f'{proc_base}/dad_transmits')
-                self.assertEqual(dad_transmits, tmp)
+                if cli_defined(self._base_path + ['ipv6'], 'disable-forwarding'):
+                    tmp = read_file(f'{proc_base}/forwarding')
+                    self.assertEqual('0', tmp)
 
         def test_dhcpv6_client_options(self):
             if not self._test_ipv6_dhcpc6:
@@ -765,7 +822,14 @@ class BasicInterfaceTest:
             prefix_len = '56'
             sla_len = str(64 - int(prefix_len))
 
+            # Create delegatee interfaces first to avoid any confusion by dhcpc6
+            # this is mainly an "issue" with virtual-ethernet interfaces
             delegatees = ['dum2340', 'dum2341', 'dum2342', 'dum2343', 'dum2344']
+            for delegatee in delegatees:
+                section = Section.section(delegatee)
+                self.cli_set(['interfaces', section, delegatee])
+
+            self.cli_commit()
 
             for interface in self._interfaces:
                 path = self._base_path + [interface]
@@ -778,8 +842,6 @@ class BasicInterfaceTest:
                 self.cli_set(pd_base + ['length', prefix_len])
 
                 for delegatee in delegatees:
-                    section = Section.section(delegatee)
-                    self.cli_set(['interfaces', section, delegatee])
                     self.cli_set(pd_base + ['interface', delegatee, 'address', address])
                     # increment interface address
                     address = str(int(address) + 1)
@@ -821,7 +883,14 @@ class BasicInterfaceTest:
             prefix_len = '56'
             sla_len = str(64 - int(prefix_len))
 
+            # Create delegatee interfaces first to avoid any confusion by dhcpc6
+            # this is mainly an "issue" with virtual-ethernet interfaces
             delegatees = ['dum3340', 'dum3341', 'dum3342', 'dum3343', 'dum3344']
+            for delegatee in delegatees:
+                section = Section.section(delegatee)
+                self.cli_set(['interfaces', section, delegatee])
+
+            self.cli_commit()
 
             for interface in self._interfaces:
                 path = self._base_path + [interface]
@@ -835,8 +904,6 @@ class BasicInterfaceTest:
                 self.cli_set(pd_base + ['length', prefix_len])
 
                 for delegatee in delegatees:
-                    section = Section.section(delegatee)
-                    self.cli_set(['interfaces', section, delegatee])
                     self.cli_set(pd_base + ['interface', delegatee, 'address', address])
                     self.cli_set(pd_base + ['interface', delegatee, 'sla-id', sla_id])
 
@@ -866,8 +933,8 @@ class BasicInterfaceTest:
                     # increment interface address
                     address = str(int(address) + 1)
 
-            # Check for running process
-            self.assertTrue(process_named_running('dhcp6c'))
+                # Check for running process
+                self.assertTrue(process_named_running('dhcp6c', interface))
 
             for delegatee in delegatees:
                 # we can already cleanup the test delegatee interface here

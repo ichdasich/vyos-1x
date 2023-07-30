@@ -1,4 +1,4 @@
-# Copyright (C) 2021 VyOS maintainers and contributors
+# Copyright (C) 2021-2023 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -14,6 +14,7 @@
 
 import os
 import unittest
+import paramiko
 
 from time import sleep
 from typing import Type
@@ -22,8 +23,8 @@ from vyos.configsession import ConfigSession
 from vyos.configsession import ConfigSessionError
 from vyos import ConfigError
 from vyos.defaults import commit_lock
-from vyos.util import cmd
-from vyos.util import run
+from vyos.utils.process import cmd
+from vyos.utils.process import run
 
 save_config = '/tmp/vyos-smoketest-save'
 
@@ -86,6 +87,19 @@ class VyOSUnitTestSHIM:
                 print(f'\n\ncommand "{command}" returned:\n')
                 pprint.pprint(out)
             return out
+
+        @staticmethod
+        def ssh_send_cmd(command, username, password, hostname='localhost'):
+            """ SSH command execution helper """
+            # Try to login via SSH
+            ssh_client = paramiko.SSHClient()
+            ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh_client.connect(hostname=hostname, username=username, password=password)
+            _, stdout, stderr = ssh_client.exec_command(command)
+            output = stdout.read().decode().strip()
+            error = stderr.read().decode().strip()
+            ssh_client.close()
+            return output, error
 
 # standard construction; typing suggestion: https://stackoverflow.com/a/70292317
 def ignore_warning(warning: Type[Warning]):

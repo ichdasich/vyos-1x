@@ -24,10 +24,10 @@ from pwd import getpwall
 from base_vyostest_shim import VyOSUnitTestSHIM
 
 from vyos.configsession import ConfigSessionError
-from vyos.util import cmd
-from vyos.util import is_systemd_service_running
-from vyos.util import process_named_running
-from vyos.util import read_file
+from vyos.utils.process import cmd
+from vyos.utils.process import is_systemd_service_running
+from vyos.utils.process import process_named_running
+from vyos.utils.file import read_file
 
 PROCESS_NAME = 'sshd'
 SSHD_CONF = '/run/sshd/sshd_config'
@@ -174,18 +174,6 @@ class TestServiceSSH(VyOSUnitTestSHIM.TestCase):
         #
         # We also try to login as an invalid user - this is not allowed to work.
 
-        def ssh_send_cmd(command, username, password, host='localhost'):
-            """ SSH command execution helper """
-            # Try to login via SSH
-            ssh_client = paramiko.SSHClient()
-            ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh_client.connect(hostname='localhost', username=username, password=password)
-            _, stdout, stderr = ssh_client.exec_command(command)
-            output = stdout.read().decode().strip()
-            error = stderr.read().decode().strip()
-            ssh_client.close()
-            return output, error
-
         test_user = 'ssh_test'
         test_pass = 'v2i57DZs8idUwMN3VC92'
         test_command = 'uname -a'
@@ -197,14 +185,14 @@ class TestServiceSSH(VyOSUnitTestSHIM.TestCase):
         self.cli_commit()
 
         # Login with proper credentials
-        output, error = ssh_send_cmd(test_command, test_user, test_pass)
+        output, error = self.ssh_send_cmd(test_command, test_user, test_pass)
         # verify login
         self.assertFalse(error)
         self.assertEqual(output, cmd(test_command))
 
         # Login with invalid credentials
         with self.assertRaises(paramiko.ssh_exception.AuthenticationException):
-            output, error = ssh_send_cmd(test_command, 'invalid_user', 'invalid_password')
+            output, error = self.ssh_send_cmd(test_command, 'invalid_user', 'invalid_password')
 
         self.cli_delete(['system', 'login', 'user', test_user])
         self.cli_commit()

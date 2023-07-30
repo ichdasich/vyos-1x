@@ -22,6 +22,7 @@ from sys import exit
 from vyos.base import Warning
 from vyos.config import Config
 from vyos.configdict import get_interface_dict
+from vyos.configdict import is_node_changed
 from vyos.configverify import verify_address
 from vyos.configverify import verify_dhcpv6
 from vyos.configverify import verify_eapol
@@ -39,9 +40,9 @@ from vyos.pki import encode_certificate
 from vyos.pki import load_certificate
 from vyos.pki import wrap_private_key
 from vyos.template import render
-from vyos.util import call
-from vyos.util import dict_search
-from vyos.util import write_file
+from vyos.utils.process import call
+from vyos.utils.dict import dict_search
+from vyos.utils.file import write_file
 from vyos import ConfigError
 from vyos import airbag
 airbag.enable()
@@ -66,10 +67,16 @@ def get_config(config=None):
                                get_first_key=True, no_tag_node_value_mangle=True)
 
     base = ['interfaces', 'ethernet']
-    _, ethernet = get_interface_dict(conf, base)
+    ifname, ethernet = get_interface_dict(conf, base)
 
     if 'deleted' not in ethernet:
        if pki: ethernet['pki'] = pki
+
+    tmp = is_node_changed(conf, base + [ifname, 'speed'])
+    if tmp: ethernet.update({'speed_duplex_changed': {}})
+
+    tmp = is_node_changed(conf, base + [ifname, 'duplex'])
+    if tmp: ethernet.update({'speed_duplex_changed': {}})
 
     return ethernet
 
@@ -137,12 +144,6 @@ def verify(ethernet):
         if int(ethernet['mtu']) > 1500 and dict_search('offload.sg', ethernet) == None:
             raise ConfigError('Xen netback drivers requires scatter-gatter offloading '\
                               'for MTU size larger then 1500 bytes')
-
-    # XDP requires multiple TX queues
-    if 'xdp' in ethernet:
-        queues = glob(f'/sys/class/net/{ifname}/queues/tx-*')
-        if len(queues) < 2:
-            raise ConfigError('XDP requires additional TX queues, too few available!')
 
     if {'is_bond_member', 'mac'} <= set(ethernet):
         Warning(f'changing mac address "{mac}" will be ignored as "{ifname}" ' \

@@ -14,9 +14,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import re
-import os
-import json
 import unittest
 
 from netifaces import interfaces
@@ -26,13 +23,12 @@ from vyos.configsession import ConfigSession
 from vyos.configsession import ConfigSessionError
 from vyos.ifconfig import Interface
 from vyos.ifconfig import Section
-from vyos.util import cmd
+from vyos.utils.process import cmd
 
 base_path = ['netns']
 namespaces = ['mgmt', 'front', 'back', 'ams-ix']
 
 class NETNSTest(VyOSUnitTestSHIM.TestCase):
-
     def setUp(self):
         self._interfaces = ['dum10', 'dum12', 'dum50']
 

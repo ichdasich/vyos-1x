@@ -17,19 +17,20 @@
 import os
 from sys import exit
 
+from vyos.base import Warning
 from vyos.config import Config
 from vyos.configdict import dict_merge
 from vyos.pki import wrap_certificate
 from vyos.pki import wrap_private_key
 from vyos.template import render
-from vyos.util import call
-from vyos.util import check_port_availability
-from vyos.util import is_systemd_service_running
-from vyos.util import is_listen_port_bind_service
-from vyos.util import dict_search
+from vyos.utils.process import call
+from vyos.utils.network import check_port_availability
+from vyos.utils.process import is_systemd_service_running
+from vyos.utils.network import is_listen_port_bind_service
+from vyos.utils.dict import dict_search
 from vyos.xml import defaults
 from vyos import ConfigError
-from crypt import crypt, mksalt, METHOD_SHA512
+from passlib.hash import sha512_crypt
 from time import sleep
 
 from vyos import airbag
@@ -44,7 +45,8 @@ radius_servers = cfg_dir + '/radius_servers'
 
 # Generate hash from user cleartext password
 def get_hash(password):
-    return crypt(password, mksalt(METHOD_SHA512))
+    return sha512_crypt.hash(password)
+
 
 
 def _default_dict_cleanup(origin: dict, default_values: dict) -> dict:
@@ -173,6 +175,19 @@ def verify(ocserv):
                                 users_wo_pswd.append(user)
                         if users_wo_pswd:
                             raise ConfigError(f'password required for users:\n{users_wo_pswd}')
+
+            # Validate that if identity-based-config is configured all child config nodes are set
+            if 'identity_based_config' in ocserv["authentication"]:
+                if 'disabled' not in ocserv["authentication"]["identity_based_config"]:
+                    Warning("Identity based configuration files is a 3rd party addition. Use at your own risk, this might break the ocserv daemon!")
+                    if 'mode' not in ocserv["authentication"]["identity_based_config"]:
+                        raise ConfigError('OpenConnect radius identity-based-config enabled but mode not selected')
+                    elif 'group' in ocserv["authentication"]["identity_based_config"]["mode"] and "radius" not in ocserv["authentication"]["mode"]:
+                        raise ConfigError('OpenConnect config-per-group must be used with radius authentication')
+                    if 'directory' not in ocserv["authentication"]["identity_based_config"]:
+                        raise ConfigError('OpenConnect identity-based-config enabled but directory not set')
+                    if 'default_config' not in ocserv["authentication"]["identity_based_config"]:
+                        raise ConfigError('OpenConnect identity-based-config enabled but default-config not set')
         else:
             raise ConfigError('openconnect authentication mode required')
     else:

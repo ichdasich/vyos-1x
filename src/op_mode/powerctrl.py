@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2018 VyOS maintainers and contributors
+# Copyright (C) 2023 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -22,7 +22,11 @@ from datetime import datetime, timedelta, time as type_time, date as type_date
 from sys import exit
 from time import time
 
-from vyos.util import ask_yes_no, cmd, call, run, STDOUT
+from vyos.utils.io import ask_yes_no
+from vyos.utils.process import call
+from vyos.utils.process import cmd
+from vyos.utils.process import run
+from vyos.utils.process import STDOUT
 
 systemd_sched_file = "/run/systemd/shutdown/scheduled"
 
@@ -102,8 +106,19 @@ def cancel_shutdown():
     else:
         print("Reboot or poweroff is not scheduled")
 
+def check_unsaved_config():
+    from vyos.config_mgmt import unsaved_commits
+    from vyos.utils.boot import boot_configuration_success
+
+    if unsaved_commits() and boot_configuration_success():
+        print("Warning: there are unsaved configuration changes!")
+        print("Run 'save' command if you do not want to lose those changes after reboot/shutdown.")
+    else:
+        pass
 
 def execute_shutdown(time, reboot=True, ask=True):
+    check_unsaved_config()
+
     action = "reboot" if reboot else "poweroff"
     if not ask:
         if not ask_yes_no(f"Are you sure you want to {action} this system?"):

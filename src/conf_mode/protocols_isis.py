@@ -25,8 +25,8 @@ from vyos.configdict import node_changed
 from vyos.configverify import verify_common_route_maps
 from vyos.configverify import verify_interface_exists
 from vyos.ifconfig import Interface
-from vyos.util import dict_search
-from vyos.util import get_interface_config
+from vyos.utils.dict import dict_search
+from vyos.utils.network import get_interface_config
 from vyos.template import render_to_string
 from vyos.xml import defaults
 from vyos import ConfigError
@@ -129,7 +129,7 @@ def verify(isis):
             vrf = isis['vrf']
             tmp = get_interface_config(interface)
             if 'master' not in tmp or tmp['master'] != vrf:
-                raise ConfigError(f'Interface {interface} is not a member of VRF {vrf}!')
+                raise ConfigError(f'Interface "{interface}" is not a member of VRF "{vrf}"!')
 
     # If md5 and plaintext-password set at the same time
     for password in ['area_password', 'domain_password']:
@@ -203,7 +203,7 @@ def verify(isis):
         if list(set(global_range) & set(local_range)):
             raise ConfigError(f'Segment-Routing Global Block ({g_low_label_value}/{g_high_label_value}) '\
                               f'conflicts with Local Block ({l_low_label_value}/{l_high_label_value})!')
-        
+
     # Check for a blank or invalid value per prefix
     if dict_search('segment_routing.prefix', isis):
         for prefix, prefix_config in isis['segment_routing']['prefix'].items():
@@ -218,7 +218,7 @@ def verify(isis):
     if dict_search('segment_routing.prefix', isis):
         for prefix, prefix_config in isis['segment_routing']['prefix'].items():
             if 'absolute' in prefix_config:
-                if ("explicit_null" in prefix_config['absolute']) and ("no_php_flag" in prefix_config['absolute']): 
+                if ("explicit_null" in prefix_config['absolute']) and ("no_php_flag" in prefix_config['absolute']):
                     raise ConfigError(f'Segment routing prefix {prefix} cannot have both explicit-null '\
                                       f'and no-php-flag configured at the same time.')
             elif 'index' in prefix_config:
@@ -232,24 +232,14 @@ def generate(isis):
     if not isis or 'deleted' in isis:
         return None
 
-    isis['protocol'] = 'isis' # required for frr/vrf.route-map.frr.j2
-    isis['frr_zebra_config'] = render_to_string('frr/vrf.route-map.frr.j2', isis)
     isis['frr_isisd_config'] = render_to_string('frr/isisd.frr.j2', isis)
     return None
 
 def apply(isis):
     isis_daemon = 'isisd'
-    zebra_daemon = 'zebra'
 
     # Save original configuration prior to starting any commit actions
     frr_cfg = frr.FRRConfig()
-
-    # The route-map used for the FIB (zebra) is part of the zebra daemon
-    frr_cfg.load_configuration(zebra_daemon)
-    frr_cfg.modify_section('(\s+)?ip protocol isis route-map [-a-zA-Z0-9.]+', stop_pattern='(\s|!)')
-    if 'frr_zebra_config' in isis:
-        frr_cfg.add_before(frr.default_add_before, isis['frr_zebra_config'])
-    frr_cfg.commit_configuration(zebra_daemon)
 
     # Generate empty helper string which can be ammended to FRR commands, it
     # will be either empty (default VRF) or contain the "vrf <name" statement

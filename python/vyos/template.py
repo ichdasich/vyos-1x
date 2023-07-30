@@ -20,10 +20,10 @@ from jinja2 import Environment
 from jinja2 import FileSystemLoader
 from jinja2 import ChainableUndefined
 from vyos.defaults import directories
-from vyos.util import chmod
-from vyos.util import chown
-from vyos.util import dict_search_args
-from vyos.util import makedir
+from vyos.utils.dict import dict_search_args
+from vyos.utils.file import makedir
+from vyos.utils.permission import chmod
+from vyos.utils.permission import chown
 
 # Holds template filters registered via register_filter()
 _FILTERS = {}
@@ -44,6 +44,7 @@ def _get_environment(location=None):
         loader=loc_loader,
         trim_blocks=True,
         undefined=ChainableUndefined,
+        extensions=['jinja2.ext.loopcontrols']
     )
     env.filters.update(_FILTERS)
     env.tests.update(_TESTS)
@@ -161,19 +162,19 @@ def force_to_list(value):
 @register_filter('seconds_to_human')
 def seconds_to_human(seconds, separator=""):
     """ Convert seconds to human-readable values like 1d6h15m23s """
-    from vyos.util import seconds_to_human
+    from vyos.utils.convert import seconds_to_human
     return seconds_to_human(seconds, separator=separator)
 
 @register_filter('bytes_to_human')
 def bytes_to_human(bytes, initial_exponent=0, precision=2):
     """ Convert bytes to human-readable values like 1.44M """
-    from vyos.util import bytes_to_human
+    from vyos.utils.convert import bytes_to_human
     return bytes_to_human(bytes, initial_exponent=initial_exponent, precision=precision)
 
 @register_filter('human_to_bytes')
 def human_to_bytes(value):
     """ Convert a data amount with a unit suffix to bytes, like 2K to 2048 """
-    from vyos.util import human_to_bytes
+    from vyos.utils.convert import human_to_bytes
     return human_to_bytes(value)
 
 @register_filter('ip_from_cidr')
@@ -423,7 +424,7 @@ def get_dhcp_router(interface):
     if not os.path.exists(lease_file):
         return None
 
-    from vyos.util import read_file
+    from vyos.utils.file import read_file
     for line in read_file(lease_file).splitlines():
         if 'option routers' in line:
             (_, _, address) = line.split()

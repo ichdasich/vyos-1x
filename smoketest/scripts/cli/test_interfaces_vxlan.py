@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2020-2022 VyOS maintainers and contributors
+# Copyright (C) 2020-2023 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -18,17 +18,14 @@ import unittest
 
 from vyos.configsession import ConfigSessionError
 from vyos.ifconfig import Interface
-from vyos.util import get_bridge_fdb
-from vyos.util import get_interface_config
+from vyos.utils.network import get_bridge_fdb
+from vyos.utils.network import get_interface_config
 from vyos.template import is_ipv6
 from base_interfaces_test import BasicInterfaceTest
 
 class VXLANInterfaceTest(BasicInterfaceTest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls._test_ip = True
-        cls._test_ipv6 = True
-        cls._test_mtu = True
         cls._base_path = ['interfaces', 'vxlan']
         cls._options = {
             'vxlan10': ['vni 10', 'remote 127.0.0.2'],

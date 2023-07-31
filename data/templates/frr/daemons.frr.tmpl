@@ -49,7 +49,7 @@ pbrd_options="  --daemon -A 127.0.0.1"
 staticd_options="  --daemon -A 127.0.0.1"
 bfdd_options="  --daemon -A 127.0.0.1"
 
-watchfrr_options=" --dry"
+watchfrr_options="-i 20 -t 7200 -T 3000"
 
 watchfrr_enable=no
 valgrind_enable=no

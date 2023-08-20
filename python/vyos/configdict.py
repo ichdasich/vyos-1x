@@ -20,7 +20,6 @@ import os
 import json
 
 from vyos.utils.dict import dict_search
-from vyos.xml import defaults
 from vyos.utils.process import cmd
 
 def retrieve_config(path_hash, base_path, config):
@@ -177,24 +176,6 @@ def get_removed_vlans(conf, path, dict):
 
     return dict
 
-def T2665_set_dhcpv6pd_defaults(config_dict):
-    """ Properly configure DHCPv6 default options in the dictionary. If there is
-    no DHCPv6 configured at all, it is safe to remove the entire configuration.
-    """
-    # As this is the same for every interface type it is safe to assume this
-    # for ethernet
-    pd_defaults = defaults(['interfaces', 'ethernet', 'dhcpv6-options', 'pd'])
-
-    # Implant default dictionary for DHCPv6-PD instances
-    if dict_search('dhcpv6_options.pd.length', config_dict):
-        del config_dict['dhcpv6_options']['pd']['length']
-
-    for pd in (dict_search('dhcpv6_options.pd', config_dict) or []):
-        config_dict['dhcpv6_options']['pd'][pd] = dict_merge(pd_defaults,
-            config_dict['dhcpv6_options']['pd'][pd])
-
-    return config_dict
-
 def is_member(conf, interface, intftype=None):
     """
     Checks if passed interface is member of other interface of specified type.
@@ -262,6 +243,48 @@ def is_mirror_intf(conf, interface, direction=None):
                     ret_val = {intf : tmp}
 
     return ret_val
+
+def has_address_configured(conf, intf):
+    """
+    Checks if interface has an address configured.
+    Checks the following config nodes:
+    'address', 'ipv6 address eui64', 'ipv6 address autoconf'
+
+    Returns True if interface has address configured, False if it doesn't.
+    """
+    from vyos.ifconfig import Section
+    ret = False
+
+    old_level = conf.get_level()
+    conf.set_level([])
+
+    intfpath = 'interfaces ' + Section.get_config_path(intf)
+    if ( conf.exists(f'{intfpath} address') or
+            conf.exists(f'{intfpath} ipv6 address autoconf') or
+            conf.exists(f'{intfpath} ipv6 address eui64') ):
+        ret = True
+
+    conf.set_level(old_level)
+    return ret
+
+def has_vrf_configured(conf, intf):
+    """
+    Checks if interface has a VRF configured.
+
+    Returns True if interface has VRF configured, False if it doesn't.
+    """
+    from vyos.ifconfig import Section
+    ret = False
+
+    old_level = conf.get_level()
+    conf.set_level([])
+
+    tmp = ['interfaces', Section.get_config_path(intf), 'vrf']
+    if conf.exists(tmp):
+        ret = True
+
+    conf.set_level(old_level)
+    return ret
 
 def has_vlan_subinterface_configured(conf, intf):
     """
@@ -453,6 +476,10 @@ def get_interface_dict(config, base, ifname='', recursive_defaults=True):
 
     # Check if any DHCP options changed which require a client restat
     dhcp = is_node_changed(config, base + [ifname, 'dhcp-options'])
+    if dhcp: dict.update({'dhcp_options_changed' : {}})
+
+    # Changine interface VRF assignemnts require a DHCP restart, too
+    dhcp = is_node_changed(config, base + [ifname, 'vrf'])
     if dhcp: dict.update({'dhcp_options_changed' : {}})
 
     # Some interfaces come with a source_interface which must also not be part

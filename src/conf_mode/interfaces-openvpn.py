@@ -61,7 +61,7 @@ from vyos.utils.kernel import unload_kmod
 from vyos.utils.process import call
 from vyos.utils.permission import chown
 from vyos.utils.process import cmd
-from vyos.validate import is_addr_assigned
+from vyos.utils.network import is_addr_assigned
 
 from vyos import ConfigError
 from vyos import airbag
@@ -166,17 +166,23 @@ def verify_pki(openvpn):
             raise ConfigError(f'Invalid shared-secret on openvpn interface {interface}')
 
     if tls:
-        if 'ca_certificate' not in tls:
-            raise ConfigError(f'Must specify "tls ca-certificate" on openvpn interface {interface}')
+        if (mode in ['server', 'client']) and ('ca_certificate' not in tls):
+            raise ConfigError(f'Must specify "tls ca-certificate" on openvpn interface {interface},\
+              it is required in server and client modes')
+        else:
+            if ('ca_certificate' not in tls) and ('peer_fingerprint' not in tls):
+                raise ConfigError('Either "tls ca-certificate" or "tls peer-fingerprint" is required\
+                  on openvpn interface {interface} in site-to-site mode')
 
-        for ca_name in tls['ca_certificate']:
-            if ca_name not in pki['ca']:
-                raise ConfigError(f'Invalid CA certificate on openvpn interface {interface}')
+        if 'ca_certificate' in tls:
+            for ca_name in tls['ca_certificate']:
+                if ca_name not in pki['ca']:
+                    raise ConfigError(f'Invalid CA certificate on openvpn interface {interface}')
 
-        if len(tls['ca_certificate']) > 1:
-            sorted_chain = sort_ca_chain(tls['ca_certificate'], pki['ca'])
-            if not verify_ca_chain(sorted_chain, pki['ca']):
-                raise ConfigError(f'CA certificates are not a valid chain')
+            if len(tls['ca_certificate']) > 1:
+                sorted_chain = sort_ca_chain(tls['ca_certificate'], pki['ca'])
+                if not verify_ca_chain(sorted_chain, pki['ca']):
+                    raise ConfigError(f'CA certificates are not a valid chain')
 
         if mode != 'client' and 'auth_key' not in tls:
             if 'certificate' not in tls:
@@ -189,16 +195,7 @@ def verify_pki(openvpn):
             if dict_search_args(pki, 'certificate', tls['certificate'], 'private', 'password_protected') is not None:
                 raise ConfigError(f'Cannot use encrypted private key on openvpn interface {interface}')
 
-            if mode == 'server' and 'dh_params' not in tls and not is_ec_private_key(pki, tls['certificate']):
-                raise ConfigError('Must specify "tls dh-params" when not using EC keys in server mode')
-
         if 'dh_params' in tls:
-            if 'dh' not in pki:
-                raise ConfigError('There are no DH parameters in PKI configuration')
-
-            if tls['dh_params'] not in pki['dh']:
-                raise ConfigError(f'Invalid dh-params on openvpn interface {interface}')
-
             pki_dh = pki['dh'][tls['dh_params']]
             dh_params = load_dh_parameters(pki_dh['parameters'])
             dh_numbers = dh_params.parameter_numbers()
@@ -206,6 +203,7 @@ def verify_pki(openvpn):
 
             if dh_bits < 2048:
                 raise ConfigError(f'Minimum DH key-size is 2048 bits')
+
 
         if 'auth_key' in tls or 'crypt_key' in tls:
             if not dict_search_args(pki, 'openvpn', 'shared_secret'):
@@ -494,9 +492,6 @@ def verify(openvpn):
             elif tmp == 'passive':
                 if openvpn['protocol'] == 'tcp-active':
                     raise ConfigError('Cannot specify "tcp-active" when "tls role" is "passive"')
-
-                if not dict_search('tls.dh_params', openvpn):
-                    raise ConfigError('Must specify "tls dh-params" when "tls role" is "passive"')
 
         if 'certificate' in openvpn['tls'] and is_ec_private_key(openvpn['pki'], openvpn['tls']['certificate']):
             if 'dh_params' in openvpn['tls']:

@@ -28,7 +28,6 @@ from vyos.ifconfig import Interface
 from vyos.utils.dict import dict_search
 from vyos.utils.network import get_interface_config
 from vyos.template import render_to_string
-from vyos.xml import defaults
 from vyos import ConfigError
 from vyos import frr
 from vyos import airbag
@@ -64,19 +63,14 @@ def get_config(config=None):
     if interfaces_removed:
         isis['interface_removed'] = list(interfaces_removed)
 
-    # Bail out early if configuration tree does not exist
+    # Bail out early if configuration tree does no longer exist. this must
+    # be done after retrieving the list of interfaces to be removed.
     if not conf.exists(base):
         isis.update({'deleted' : ''})
         return isis
 
-    # We have gathered the dict representation of the CLI, but there are default
-    # options which we need to update into the dictionary retrived.
-    # XXX: Note that we can not call defaults(base), as defaults does not work
-    # on an instance of a tag node. As we use the exact same CLI definition for
-    # both the non-vrf and vrf version this is absolutely safe!
-    default_values = defaults(base_path)
     # merge in default values
-    isis = dict_merge(default_values, isis)
+    isis = conf.merge_defaults(isis, recursive=True)
 
     # We also need some additional information from the config, prefix-lists
     # and route-maps for instance. They will be used in verify().
@@ -254,7 +248,7 @@ def apply(isis):
         if key not in isis:
             continue
         for interface in isis[key]:
-            frr_cfg.modify_section(f'^interface {interface}{vrf}', stop_pattern='^exit', remove_stop_mark=True)
+            frr_cfg.modify_section(f'^interface {interface}', stop_pattern='^exit', remove_stop_mark=True)
 
     if 'frr_isisd_config' in isis:
         frr_cfg.add_before(frr.default_add_before, isis['frr_isisd_config'])

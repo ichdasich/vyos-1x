@@ -27,7 +27,7 @@ from vyos.ifconfig import Section
 from vyos.utils.process import cmd
 from vyos.utils.file import read_file
 from vyos.utils.network import get_interface_config
-from vyos.validate import is_intf_addr_assigned
+from vyos.utils.network import is_intf_addr_assigned
 
 class BridgeInterfaceTest(BasicInterfaceTest.TestCase):
     @classmethod
@@ -41,9 +41,8 @@ class BridgeInterfaceTest(BasicInterfaceTest.TestCase):
         if 'TEST_ETH' in os.environ:
             cls._members = os.environ['TEST_ETH'].split()
         else:
-            for tmp in Section.interfaces('ethernet'):
-                if not '.' in tmp:
-                    cls._members.append(tmp)
+            for tmp in Section.interfaces('ethernet', vlan=False):
+                cls._members.append(tmp)
 
         cls._options['br0'] = []
         for member in cls._members:

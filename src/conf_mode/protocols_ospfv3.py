@@ -20,6 +20,7 @@ from sys import exit
 from sys import argv
 
 from vyos.config import Config
+from vyos.config import config_dict_merge
 from vyos.configdict import dict_merge
 from vyos.configdict import node_changed
 from vyos.configverify import verify_common_route_maps
@@ -29,7 +30,6 @@ from vyos.template import render_to_string
 from vyos.ifconfig import Interface
 from vyos.utils.dict import dict_search
 from vyos.utils.network import get_interface_config
-from vyos.xml import defaults
 from vyos import ConfigError
 from vyos import frr
 from vyos import airbag
@@ -64,17 +64,16 @@ def get_config(config=None):
     if interfaces_removed:
         ospfv3['interface_removed'] = list(interfaces_removed)
 
-    # Bail out early if configuration tree does not exist
+    # Bail out early if configuration tree does no longer exist. this must
+    # be done after retrieving the list of interfaces to be removed.
     if not conf.exists(base):
         ospfv3.update({'deleted' : ''})
         return ospfv3
 
     # We have gathered the dict representation of the CLI, but there are default
     # options which we need to update into the dictionary retrived.
-    # XXX: Note that we can not call defaults(base), as defaults does not work
-    # on an instance of a tag node. As we use the exact same CLI definition for
-    # both the non-vrf and vrf version this is absolutely safe!
-    default_values = defaults(base_path)
+    default_values = conf.get_config_defaults(**ospfv3.kwargs,
+                                              recursive=True)
 
     # We have to cleanup the default dict, as default values could enable features
     # which are not explicitly enabled on the CLI. Example: default-information
@@ -86,12 +85,10 @@ def get_config(config=None):
     if 'graceful_restart' not in ospfv3:
         del default_values['graceful_restart']
 
-    # XXX: T2665: we currently have no nice way for defaults under tag nodes,
-    # clean them out and add them manually :(
-    del default_values['interface']
+    default_values.pop('interface', {})
 
     # merge in remaining default values
-    ospfv3 = dict_merge(default_values, ospfv3)
+    ospfv3 = config_dict_merge(default_values, ospfv3)
 
     # We also need some additional information from the config, prefix-lists
     # and route-maps for instance. They will be used in verify().
@@ -170,7 +167,7 @@ def apply(ospfv3):
         if key not in ospfv3:
             continue
         for interface in ospfv3[key]:
-            frr_cfg.modify_section(f'^interface {interface}{vrf}', stop_pattern='^exit', remove_stop_mark=True)
+            frr_cfg.modify_section(f'^interface {interface}', stop_pattern='^exit', remove_stop_mark=True)
 
     if 'new_frr_config' in ospfv3:
         frr_cfg.add_before(frr.default_add_before, ospfv3['new_frr_config'])

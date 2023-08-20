@@ -25,7 +25,6 @@ from netifaces import interfaces
 
 from vyos.base import Warning
 from vyos.config import Config
-from vyos.configdict import dict_merge
 from vyos.template import render
 from vyos.template import is_ip_network
 from vyos.utils.kernel import check_kmod
@@ -33,8 +32,7 @@ from vyos.utils.dict import dict_search
 from vyos.utils.dict import dict_search_args
 from vyos.utils.process import cmd
 from vyos.utils.process import run
-from vyos.validate import is_addr_assigned
-from vyos.xml import defaults
+from vyos.utils.network import is_addr_assigned
 from vyos import ConfigError
 
 from vyos import airbag
@@ -126,6 +124,18 @@ def verify_rule(config, err_msg, groups_dict):
                 if config['protocol'] not in ['tcp', 'udp', 'tcp_udp']:
                     raise ConfigError('Protocol must be tcp, udp, or tcp_udp when specifying a port-group')
 
+    if 'load_balance' in config:
+        for item in ['source-port', 'destination-port']:
+            if item in config['load_balance']['hash'] and config['protocol'] not in ['tcp', 'udp']:
+                raise ConfigError('Protocol must be tcp or udp when specifying hash ports')
+        count = 0
+        if 'backend' in config['load_balance']:
+            for member in config['load_balance']['backend']:
+                weight = config['load_balance']['backend'][member]['weight']
+                count = count +  int(weight)
+            if count != 100:
+                Warning(f'Sum of weight for nat load balance rule is not 100. You may get unexpected behaviour')
+
 def get_config(config=None):
     if config:
         conf = config
@@ -133,16 +143,9 @@ def get_config(config=None):
         conf = Config()
 
     base = ['nat']
-    nat = conf.get_config_dict(base, key_mangling=('-', '_'), get_first_key=True)
-
-    # T2665: we must add the tagNode defaults individually until this is
-    # moved to the base class
-    for direction in ['source', 'destination', 'static']:
-        if direction in nat:
-            default_values = defaults(base + [direction, 'rule'])
-            for rule in dict_search(f'{direction}.rule', nat) or []:
-                nat[direction]['rule'][rule] = dict_merge(default_values,
-                    nat[direction]['rule'][rule])
+    nat = conf.get_config_dict(base, key_mangling=('-', '_'),
+                               get_first_key=True,
+                               with_recursive_defaults=True)
 
     # read in current nftable (once) for further processing
     tmp = cmd('nft -j list table raw')
@@ -199,7 +202,7 @@ def verify(nat):
                 Warning(f'rule "{rule}" interface "{config["outbound_interface"]}" does not exist on this system')
 
             if not dict_search('translation.address', config) and not dict_search('translation.port', config):
-                if 'exclude' not in config:
+                if 'exclude' not in config and 'backend' not in config['load_balance']:
                     raise ConfigError(f'{err_msg} translation requires address and/or port')
 
             addr = dict_search('translation.address', config)
@@ -210,7 +213,6 @@ def verify(nat):
 
             # common rule verification
             verify_rule(config, err_msg, nat['firewall_group'])
-
 
     if dict_search('destination.rule', nat):
         for rule, config in dict_search('destination.rule', nat).items():
@@ -223,7 +225,7 @@ def verify(nat):
                 Warning(f'rule "{rule}" interface "{config["inbound_interface"]}" does not exist on this system')
 
             if not dict_search('translation.address', config) and not dict_search('translation.port', config) and not dict_search('translation.redirect.port', config):
-                if 'exclude' not in config:
+                if 'exclude' not in config and 'backend' not in config['load_balance']:
                     raise ConfigError(f'{err_msg} translation requires address and/or port')
 
             # common rule verification

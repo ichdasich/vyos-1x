@@ -1,8 +1,5 @@
 # vyos-1x: VyOS command definitions, configuration scripts, and data
 
-[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=vyos_vyos-1x&metric=coverage)](https://sonarcloud.io/component_measures?id=vyos_vyos-1x&metric=coverage)
-[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fvyos%2Fvyos-1x.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fvyos%2Fvyos-1x?ref=badge_shield)
-
 VyOS 1.1.x had its codebase split into way too many submodules for no good
 reason, which made it hard to navigate or write meaningful changelogs. As the
 code undergoes rewrite in the new style in VyOS 1.2.0+, we consolidate the
@@ -56,7 +53,7 @@ The guidelines in a nutshell:
   for the common structure
 * Use the `get_config_dict()` API as much as possible when retrieving values from the CLI
 * Use a template processor when the format is more complex than just one line
-  (Jinja2 and pystache are acceptable options)
+  (our standard is Jinja2)
 
 ## Tests
 
@@ -74,5 +71,3 @@ Runtime tests are executed by the CI system on a running VyOS instance inside
 QEMU. The testcases can be found inside the smoketest subdirectory which will
 be placed into the vyos-1x-smoketest package.
 
-## License
-[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fvyos%2Fvyos-1x.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Fvyos%2Fvyos-1x?ref=badge_large)

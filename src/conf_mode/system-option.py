@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2019-2022 VyOS maintainers and contributors
+# Copyright (C) 2019-2023 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -21,14 +21,12 @@ from sys import exit
 from time import sleep
 
 from vyos.config import Config
-from vyos.configdict import dict_merge
 from vyos.configverify import verify_source_interface
 from vyos.template import render
 from vyos.utils.process import cmd
 from vyos.utils.process import is_systemd_service_running
-from vyos.validate import is_addr_assigned
-from vyos.validate import is_intf_addr_assigned
-from vyos.xml import defaults
+from vyos.utils.network import is_addr_assigned
+from vyos.utils.network import is_intf_addr_assigned
 from vyos import ConfigError
 from vyos import airbag
 airbag.enable()
@@ -36,6 +34,11 @@ airbag.enable()
 curlrc_config = r'/etc/curlrc'
 ssh_config = r'/etc/ssh/ssh_config.d/91-vyos-ssh-client-options.conf'
 systemd_action_file = '/lib/systemd/system/ctrl-alt-del.target'
+time_format_to_locale = {
+    '12-hour': 'en_US.UTF-8',
+    '24-hour': 'en_GB.UTF-8'
+}
+
 
 def get_config(config=None):
     if config:
@@ -43,12 +46,9 @@ def get_config(config=None):
     else:
         conf = Config()
     base = ['system', 'option']
-    options = conf.get_config_dict(base, key_mangling=('-', '_'), get_first_key=True)
-
-    # We have gathered the dict representation of the CLI, but there are default
-    # options which we need to update into the dictionary retrived.
-    default_values = defaults(base)
-    options = dict_merge(default_values, options)
+    options = conf.get_config_dict(base, key_mangling=('-', '_'),
+                                   get_first_key=True,
+                                   with_recursive_defaults=True)
 
     return options
 
@@ -142,6 +142,11 @@ def apply(options):
       cmd('systemctl enable root-partition-auto-resize.service')
     else:
       cmd('systemctl disable root-partition-auto-resize.service')
+
+    # Time format 12|24-hour
+    if 'time_format' in options:
+        time_format = time_format_to_locale.get(options['time_format'])
+        cmd(f'localectl set-locale LC_TIME={time_format}')
 
 if __name__ == '__main__':
     try:

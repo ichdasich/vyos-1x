@@ -107,7 +107,8 @@ class QoSBase:
 
             queue_limit = dict_search('queue_limit', config)
             for ii in range(1, 4):
-                tmp = f'tc qdisc replace dev {self._interface} parent {handle:x}:{ii:x} pfifo limit {queue_limit}'
+                tmp = f'tc qdisc replace dev {self._interface} parent {handle:x}:{ii:x} pfifo'
+                if queue_limit: tmp += f' limit {queue_limit}'
                 self._cmd(tmp)
 
         elif queue_type == 'fair-queue':
@@ -296,6 +297,27 @@ class QoSBase:
                                 cls = int(cls)
                                 filter_cmd += f' flowid {self._parent:x}:{cls:x}'
                                 self._cmd(filter_cmd)
+
+                    if any(tmp in ['exceed', 'bandwidth', 'burst'] for tmp in cls_config):
+                        filter_cmd += f' action police'
+
+                        if 'exceed' in cls_config:
+                            action = cls_config['exceed']
+                            filter_cmd += f' conform-exceed {action}'
+                        if 'not_exceed' in cls_config:
+                            action = cls_config['not_exceed']
+                            filter_cmd += f'/{action}'
+
+                        if 'bandwidth' in cls_config:
+                            rate = self._rate_convert(cls_config['bandwidth'])
+                            filter_cmd += f' rate {rate}'
+
+                        if 'burst' in cls_config:
+                            burst = cls_config['burst']
+                            filter_cmd += f' burst {burst}'
+                        cls = int(cls)
+                        filter_cmd += f' flowid {self._parent:x}:{cls:x}'
+                        self._cmd(filter_cmd)
 
                 else:
 

@@ -1,4 +1,4 @@
-# Copyright 2019-2022 VyOS maintainers and contributors <maintainers@vyos.io>
+# Copyright 2019-2023 VyOS maintainers and contributors <maintainers@vyos.io>
 #
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
@@ -31,6 +31,7 @@ from vyos import ConfigError
 from vyos.configdict import list_diff
 from vyos.configdict import dict_merge
 from vyos.configdict import get_vlan_ids
+from vyos.defaults import directories
 from vyos.template import render
 from vyos.utils.network import mac2eui64
 from vyos.utils.dict import dict_search
@@ -40,14 +41,14 @@ from vyos.utils.network import get_interface_namespace
 from vyos.utils.process import is_systemd_service_active
 from vyos.template import is_ipv4
 from vyos.template import is_ipv6
-from vyos.validate import is_intf_addr_assigned
-from vyos.validate import is_ipv6_link_local
-from vyos.validate import assert_boolean
-from vyos.validate import assert_list
-from vyos.validate import assert_mac
-from vyos.validate import assert_mtu
-from vyos.validate import assert_positive
-from vyos.validate import assert_range
+from vyos.utils.network import is_intf_addr_assigned
+from vyos.utils.network import is_ipv6_link_local
+from vyos.utils.assertion import assert_boolean
+from vyos.utils.assertion import assert_list
+from vyos.utils.assertion import assert_mac
+from vyos.utils.assertion import assert_mtu
+from vyos.utils.assertion import assert_positive
+from vyos.utils.assertion import assert_range
 
 from vyos.ifconfig.control import Control
 from vyos.ifconfig.vrrp import VRRP
@@ -190,6 +191,10 @@ class Interface(Control):
             'validate': lambda fwd: assert_range(fwd,0,2),
             'location': '/proc/sys/net/ipv6/conf/{ifname}/forwarding',
         },
+        'ipv6_accept_dad': {
+            'validate': lambda dad: assert_range(dad,0,3),
+            'location': '/proc/sys/net/ipv6/conf/{ifname}/accept_dad',
+        },
         'ipv6_dad_transmits': {
             'validate': assert_positive,
             'location': '/proc/sys/net/ipv6/conf/{ifname}/dad_transmits',
@@ -218,6 +223,10 @@ class Interface(Control):
         'link_detect': {
             'validate': lambda link: assert_range(link,0,3),
             'location': '/proc/sys/net/ipv4/conf/{ifname}/link_filter',
+        },
+        'per_client_thread': {
+            'validate': assert_boolean,
+            'location': '/sys/class/net/{ifname}/threaded',
         },
     }
 
@@ -255,6 +264,9 @@ class Interface(Control):
         'ipv6_forwarding': {
             'location': '/proc/sys/net/ipv6/conf/{ifname}/forwarding',
         },
+        'ipv6_accept_dad': {
+            'location': '/proc/sys/net/ipv6/conf/{ifname}/accept_dad',
+        },
         'ipv6_dad_transmits': {
             'location': '/proc/sys/net/ipv6/conf/{ifname}/dad_transmits',
         },
@@ -266,6 +278,10 @@ class Interface(Control):
         },
         'link_detect': {
             'location': '/proc/sys/net/ipv4/conf/{ifname}/link_filter',
+        },
+        'per_client_thread': {
+            'validate': assert_boolean,
+            'location': '/sys/class/net/{ifname}/threaded',
         },
     }
 
@@ -845,6 +861,13 @@ class Interface(Control):
             return None
         return self.set_interface('ipv6_forwarding', forwarding)
 
+    def set_ipv6_dad_accept(self, dad):
+        """Whether to accept DAD (Duplicate Address Detection)"""
+        tmp = self.get_interface('ipv6_accept_dad')
+        if tmp == dad:
+            return None
+        return self.set_interface('ipv6_accept_dad', dad)
+
     def set_ipv6_dad_messages(self, dad):
         """
         The amount of Duplicate Address Detection probes to send.
@@ -1240,44 +1263,49 @@ class Interface(Control):
             raise ValueError()
 
         ifname = self.ifname
-        config_base = r'/var/lib/dhcp/dhclient'
-        config_file = f'{config_base}_{ifname}.conf'
-        options_file = f'{config_base}_{ifname}.options'
-        pid_file = f'{config_base}_{ifname}.pid'
-        lease_file = f'{config_base}_{ifname}.leases'
+        config_base = directories['isc_dhclient_dir'] + '/dhclient'
+        dhclient_config_file = f'{config_base}_{ifname}.conf'
+        dhclient_lease_file = f'{config_base}_{ifname}.leases'
+        systemd_override_file = f'/run/systemd/system/dhclient@{ifname}.service.d/10-override.conf'
         systemd_service = f'dhclient@{ifname}.service'
+
+        # Rendered client configuration files require the apsolute config path
+        self.config['isc_dhclient_dir'] = directories['isc_dhclient_dir']
 
         # 'up' check is mandatory b/c even if the interface is A/D, as soon as
         # the DHCP client is started the interface will be placed in u/u state.
         # This is not what we intended to do when disabling an interface.
-        if enable and 'disable' not in self._config:
-            if dict_search('dhcp_options.host_name', self._config) == None:
+        if enable and 'disable' not in self.config:
+            if dict_search('dhcp_options.host_name', self.config) == None:
                 # read configured system hostname.
                 # maybe change to vyos hostd client ???
                 hostname = 'vyos'
                 with open('/etc/hostname', 'r') as f:
                     hostname = f.read().rstrip('\n')
                     tmp = {'dhcp_options' : { 'host_name' : hostname}}
-                    self._config = dict_merge(tmp, self._config)
+                    self.config = dict_merge(tmp, self.config)
 
-            render(options_file, 'dhcp-client/daemon-options.j2', self._config)
-            render(config_file, 'dhcp-client/ipv4.j2', self._config)
+            render(systemd_override_file, 'dhcp-client/override.conf.j2', self.config)
+            render(dhclient_config_file, 'dhcp-client/ipv4.j2', self.config)
+
+            # Reload systemd unit definitons as some options are dynamically generated
+            self._cmd('systemctl daemon-reload')
 
             # When the DHCP client is restarted a brief outage will occur, as
             # the old lease is released a new one is acquired (T4203). We will
             # only restart DHCP client if it's option changed, or if it's not
             # running, but it should be running (e.g. on system startup)
-            if 'dhcp_options_changed' in self._config or not is_systemd_service_active(systemd_service):
+            if 'dhcp_options_changed' in self.config or not is_systemd_service_active(systemd_service):
                 return self._cmd(f'systemctl restart {systemd_service}')
-            return None
         else:
             if is_systemd_service_active(systemd_service):
                 self._cmd(f'systemctl stop {systemd_service}')
             # cleanup old config files
-            for file in [config_file, options_file, pid_file, lease_file]:
+            for file in [dhclient_config_file, systemd_override_file, dhclient_lease_file]:
                 if os.path.isfile(file):
                     os.remove(file)
 
+        return None
 
     def set_dhcpv6(self, enable):
         """
@@ -1287,11 +1315,20 @@ class Interface(Control):
             raise ValueError()
 
         ifname = self.ifname
-        config_file = f'/run/dhcp6c/dhcp6c.{ifname}.conf'
+        config_base = directories['dhcp6_client_dir']
+        config_file = f'{config_base}/dhcp6c.{ifname}.conf'
+        systemd_override_file = f'/run/systemd/system/dhcp6c@{ifname}.service.d/10-override.conf'
         systemd_service = f'dhcp6c@{ifname}.service'
 
-        if enable and 'disable' not in self._config:
-            render(config_file, 'dhcp-client/ipv6.j2', self._config)
+        # Rendered client configuration files require the apsolute config path
+        self.config['dhcp6_client_dir'] = directories['dhcp6_client_dir']
+
+        if enable and 'disable' not in self.config:
+            render(systemd_override_file, 'dhcp-client/ipv6.override.conf.j2', self.config)
+            render(config_file, 'dhcp-client/ipv6.j2', self.config)
+
+            # Reload systemd unit definitons as some options are dynamically generated
+            self._cmd('systemctl daemon-reload')
 
             # We must ignore any return codes. This is required to enable
             # DHCPv6-PD for interfaces which are yet not up and running.
@@ -1302,26 +1339,28 @@ class Interface(Control):
             if os.path.isfile(config_file):
                 os.remove(config_file)
 
+        return None
+
     def set_mirror_redirect(self):
         # Please refer to the document for details
         #   - https://man7.org/linux/man-pages/man8/tc.8.html
         #   - https://man7.org/linux/man-pages/man8/tc-mirred.8.html
         # Depening if we are the source or the target interface of the port
         # mirror we need to setup some variables.
-        source_if = self._config['ifname']
+        source_if = self.config['ifname']
 
         mirror_config = None
-        if 'mirror' in self._config:
-            mirror_config = self._config['mirror']
-        if 'is_mirror_intf' in self._config:
-            source_if = next(iter(self._config['is_mirror_intf']))
-            mirror_config = self._config['is_mirror_intf'][source_if].get('mirror', None)
+        if 'mirror' in self.config:
+            mirror_config = self.config['mirror']
+        if 'is_mirror_intf' in self.config:
+            source_if = next(iter(self.config['is_mirror_intf']))
+            mirror_config = self.config['is_mirror_intf'][source_if].get('mirror', None)
 
         redirect_config = None
 
         # clear existing ingess - ignore errors (e.g. "Error: Cannot find specified
         # qdisc on specified device") - we simply cleanup all stuff here
-        if not 'traffic_policy' in self._config:
+        if not 'traffic_policy' in self.config:
             self._popen(f'tc qdisc del dev {source_if} parent ffff: 2>/dev/null');
             self._popen(f'tc qdisc del dev {source_if} parent 1: 2>/dev/null');
 
@@ -1345,15 +1384,39 @@ class Interface(Control):
                 if err: print('tc qdisc(filter for mirror port failed')
 
         # Apply interface traffic redirection policy
-        elif 'redirect' in self._config:
+        elif 'redirect' in self.config:
             _, err = self._popen(f'tc qdisc add dev {source_if} handle ffff: ingress')
             if err: print(f'tc qdisc add for redirect failed!')
 
-            target_if = self._config['redirect']
+            target_if = self.config['redirect']
             _, err = self._popen(f'tc filter add dev {source_if} parent ffff: protocol '\
                                  f'all prio 10 u32 match u32 0 0 flowid 1:1 action mirred '\
                                  f'egress redirect dev {target_if}')
             if err: print('tc filter add for redirect failed')
+
+    def set_per_client_thread(self, enable):
+        """
+        Per-device control to enable/disable the threaded mode for all the napi
+        instances of the given network device, without the need for a device up/down.
+
+        User sets it to 1 or 0 to enable or disable threaded mode.
+
+        Example:
+        >>> from vyos.ifconfig import Interface
+        >>> Interface('wg1').set_per_client_thread(1)
+        """
+        # In the case of a "virtual" interface like wireguard, the sysfs
+        # node is only created once there is a peer configured. We can now
+        # add a verify() code-path for this or make this dynamic without
+        # nagging the user
+        tmp = self._sysfs_get['per_client_thread']['location']
+        if not os.path.exists(tmp):
+            return None
+
+        tmp = self.get_interface('per_client_thread')
+        if tmp == enable:
+            return None
+        self.set_interface('per_client_thread', enable)
 
     def update(self, config):
         """ General helper function which works on a dictionary retrived by
@@ -1368,7 +1431,7 @@ class Interface(Control):
         # Cache the configuration - it will be reused inside e.g. DHCP handler
         # XXX: maybe pass the option via __init__ in the future and rename this
         # method to apply()?
-        self._config = config
+        self.config = config
 
         # Change interface MAC address - re-set to real hardware address (hw-id)
         # if custom mac is removed. Skip if bond member.
@@ -1534,10 +1597,17 @@ class Interface(Control):
         value = '1' if (tmp != None) else '0'
         self.set_ipv6_autoconf(value)
 
-        # IPv6 Duplicate Address Detection (DAD) tries
+        # Whether to accept IPv6 DAD (Duplicate Address Detection) packets
+        tmp = dict_search('ipv6.accept_dad', config)
+        # Not all interface types got this CLI option, but if they do, there
+        # is an XML defaultValue available
+        if (tmp != None): self.set_ipv6_dad_accept(tmp)
+
+        # IPv6 DAD tries
         tmp = dict_search('ipv6.dup_addr_detect_transmits', config)
-        value = tmp if (tmp != None) else '1'
-        self.set_ipv6_dad_messages(value)
+        # Not all interface types got this CLI option, but if they do, there
+        # is an XML defaultValue available
+        if (tmp != None): self.set_ipv6_dad_messages(tmp)
 
         # Delete old IPv6 EUI64 addresses before changing MAC
         for addr in (dict_search('ipv6.address.eui64_old', config) or []):
@@ -1562,6 +1632,11 @@ class Interface(Control):
 
         # configure interface mirror or redirection target
         self.set_mirror_redirect()
+
+        # enable/disable NAPI threading mode
+        tmp = dict_search('per_client_thread', config)
+        value = '1' if (tmp != None) else '0'
+        self.set_per_client_thread(value)
 
         # Enable/Disable of an interface must always be done at the end of the
         # derived class to make use of the ref-counting set_admin_state()

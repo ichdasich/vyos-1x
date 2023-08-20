@@ -79,27 +79,9 @@ def get_config(config=None):
 
     ifname, wifi = get_interface_dict(conf, base)
 
-    # Cleanup "delete" default values when required user selectable values are
-    # not defined at all
-    tmp = conf.get_config_dict(base + [ifname], key_mangling=('-', '_'),
-                               get_first_key=True)
-    if not (dict_search('security.wpa.passphrase', tmp) or
-            dict_search('security.wpa.radius', tmp)):
-        if 'deleted' not in wifi:
-            del wifi['security']['wpa']
-            # if 'security' key is empty, drop it too
-            if len(wifi['security']) == 0:
-                del wifi['security']
-
-    # defaults include RADIUS server specifics per TAG node which need to be
-    # added to individual RADIUS servers instead - so we can simply delete them
-    if dict_search('security.wpa.radius.server.port', wifi) != None:
-        del wifi['security']['wpa']['radius']['server']['port']
-        if not len(wifi['security']['wpa']['radius']['server']):
-            del wifi['security']['wpa']['radius']
-        if not len(wifi['security']['wpa']):
-            del wifi['security']['wpa']
-        if not len(wifi['security']):
+    if 'deleted' not in wifi:
+        # then get_interface_dict provides default keys
+        if wifi.from_defaults(['security']): # if not set by user
             del wifi['security']
 
     if 'security' in wifi and 'wpa' in wifi['security']:
@@ -120,14 +102,6 @@ def get_config(config=None):
     tmp = find_other_stations(conf, base, wifi['ifname'])
     if tmp: wifi['station_interfaces'] = tmp
 
-    # Add individual RADIUS server default values
-    if dict_search('security.wpa.radius.server', wifi):
-        default_values = defaults(base + ['security', 'wpa', 'radius', 'server'])
-
-        for server in dict_search('security.wpa.radius.server', wifi):
-            wifi['security']['wpa']['radius']['server'][server] = dict_merge(
-                default_values, wifi['security']['wpa']['radius']['server'][server])
-
     return wifi
 
 def verify(wifi):
@@ -142,7 +116,7 @@ def verify(wifi):
         raise ConfigError('You must specify a WiFi mode')
 
     if 'ssid' not in wifi and wifi['type'] != 'monitor':
-        raise ConfigError('SSID must be configured')
+        raise ConfigError('SSID must be configured unless type is set to "monitor"!')
 
     if wifi['type'] == 'access-point':
         if 'country_code' not in wifi:

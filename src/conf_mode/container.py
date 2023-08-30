@@ -33,6 +33,7 @@ from vyos.utils.process import call
 from vyos.utils.process import cmd
 from vyos.utils.process import run
 from vyos.utils.process import rc_cmd
+from vyos.template import bracketize_ipv6
 from vyos.template import inc_ip
 from vyos.template import is_ipv4
 from vyos.template import is_ipv6
@@ -280,7 +281,15 @@ def generate_run_arguments(name, container_config):
             protocol = container_config['port'][portmap]['protocol']
             sport = container_config['port'][portmap]['source']
             dport = container_config['port'][portmap]['destination']
-            port += f' --publish {sport}:{dport}/{protocol}'
+            listen_addresses = container_config['port'][portmap].get('listen_address', [])
+
+            # If listen_addresses is not empty, include them in the publish command
+            if listen_addresses:
+                for listen_address in listen_addresses:
+                    port += f' --publish {bracketize_ipv6(listen_address)}:{sport}:{dport}/{protocol}'
+            else:
+                # If listen_addresses is empty, just include the standard publish command
+                port += f' --publish {sport}:{dport}/{protocol}'
 
     # Bind volume
     volume = ''
@@ -454,6 +463,7 @@ def apply(container):
             # it to a VRF as there's no consumer, yet.
             if os.path.exists(f'/sys/class/net/{network_name}'):
                 tmp = Interface(network_name)
+                tmp.add_ipv6_eui64_address('fe80::/64')
                 tmp.set_vrf(network_config.get('vrf', ''))
 
     return None

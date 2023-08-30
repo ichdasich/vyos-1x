@@ -54,7 +54,6 @@ sysfs_config = {
     'log_martians': {'sysfs': '/proc/sys/net/ipv4/conf/all/log_martians'},
     'receive_redirects': {'sysfs': '/proc/sys/net/ipv4/conf/*/accept_redirects'},
     'send_redirects': {'sysfs': '/proc/sys/net/ipv4/conf/*/send_redirects'},
-    'source_validation': {'sysfs': '/proc/sys/net/ipv4/conf/*/rp_filter', 'disable': '0', 'strict': '1', 'loose': '2'},
     'syn_cookies': {'sysfs': '/proc/sys/net/ipv4/tcp_syncookies'},
     'twa_hazards_protection': {'sysfs': '/proc/sys/net/ipv4/tcp_rfc1337'}
 }
@@ -259,6 +258,11 @@ def verify_rule(firewall, rule_conf, ipv6):
         if 'queue_threshold' in rule_conf['log_options'] and 'group' not in rule_conf['log_options']:
             raise ConfigError('log-options queue-threshold defined, but log group is not define')
 
+    for direction in ['inbound_interface','outbound_interface']:
+        if direction in rule_conf:
+            if 'interface_name' in rule_conf[direction] and 'interface_group' in rule_conf[direction]:
+                raise ConfigError(f'Cannot specify both interface-group and interface-name for {direction}')
+
 def verify_nested_group(group_name, group, groups, seen):
     if 'include' not in group:
         return
@@ -329,6 +333,17 @@ def generate(firewall):
     if not os.path.exists(nftables_conf):
         firewall['first_install'] = True
 
+    # Determine if conntrack is needed
+    firewall['ipv4_conntrack_action'] = 'return'
+    firewall['ipv6_conntrack_action'] = 'return'
+
+    for rules, path in dict_search_recursive(firewall, 'rule'):
+        if any(('state' in rule_conf or 'connection_status' in rule_conf) for rule_conf in rules.values()):
+            if path[0] == 'ipv4':
+                firewall['ipv4_conntrack_action'] = 'accept'
+            elif path[0] == 'ipv6':
+                firewall['ipv6_conntrack_action'] = 'accept'
+
     render(nftables_conf, 'firewall/nftables.j2', firewall)
     return None
 
@@ -350,39 +365,6 @@ def apply_sysfs(firewall):
             for path in paths:
                 with open(path, 'w') as f:
                     f.write(value)
-
-def post_apply_trap(firewall):
-    if 'first_install' in firewall:
-        return None
-
-    if not process_named_running('snmpd'):
-        return None
-
-    trap_username = os.getlogin()
-
-    for host, target_conf in firewall['trap_targets'].items():
-        community = target_conf['community'] if 'community' in target_conf else 'public'
-        port = int(target_conf['port']) if 'port' in target_conf else 162
-
-        base_cmd = f'snmptrap -v2c -c {community} {host}:{port} 0 {snmp_trap_mib}::{snmp_trap_name} '
-
-        for change_type, changes in firewall['trap_diff'].items():
-            for path_str, value in changes.items():
-                objects = [
-                    f'mgmtEventUser s "{trap_username}"',
-                    f'mgmtEventSource i {snmp_event_source}',
-                    f'mgmtEventType i {snmp_change_type[change_type]}'
-                ]
-
-                if change_type == 'add':
-                    objects.append(f'mgmtEventCurrCfg s "{path_str} {value}"')
-                elif change_type == 'delete':
-                    objects.append(f'mgmtEventPrevCfg s "{path_str} {value}"')
-                elif change_type == 'change':
-                    objects.append(f'mgmtEventPrevCfg s "{path_str} {value[0]}"')
-                    objects.append(f'mgmtEventCurrCfg s "{path_str} {value[1]}"')
-
-                cmd(base_cmd + ' '.join(objects))
 
 def apply(firewall):
     install_result, output = rc_cmd(f'nft -f {nftables_conf}')
@@ -407,8 +389,6 @@ def apply(firewall):
         if 'name' in firewall['geoip_updated'] or 'ipv6_name' in firewall['geoip_updated']:
             print('Updating GeoIP. Please wait...')
             geoip_update(firewall)
-
-    post_apply_trap(firewall)
 
     return None
 

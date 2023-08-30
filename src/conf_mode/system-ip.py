@@ -61,8 +61,7 @@ def verify(opt):
     return
 
 def generate(opt):
-    if 'protocol' in opt:
-        opt['frr_zebra_config'] = render_to_string('frr/zebra.route-map.frr.j2', opt)
+    opt['frr_zebra_config'] = render_to_string('frr/zebra.route-map.frr.j2', opt)
     return
 
 def apply(opt):
@@ -95,17 +94,37 @@ def apply(opt):
     value = '1' if (tmp != None) else '0'
     sysctl_write('net.ipv4.fib_multipath_hash_policy', value)
 
-    if 'protocol' in opt:
-        zebra_daemon = 'zebra'
-        # Save original configuration prior to starting any commit actions
-        frr_cfg = frr.FRRConfig()
+    # configure TCP options (defaults as of Linux 6.4)
+    tmp = dict_search('tcp.mss.probing', opt)
+    if tmp is None:
+        value = 0
+    elif tmp == 'on-icmp-black-hole':
+        value = 1
+    elif tmp == 'force':
+        value = 2
+    else:
+        # Shouldn't happen
+        raise ValueError("TCP MSS probing is neither 'on-icmp-black-hole' nor 'force'!")
+    sysctl_write('net.ipv4.tcp_mtu_probing', value)
 
-        # The route-map used for the FIB (zebra) is part of the zebra daemon
-        frr_cfg.load_configuration(zebra_daemon)
-        frr_cfg.modify_section(r'ip protocol \w+ route-map [-a-zA-Z0-9.]+', stop_pattern='(\s|!)')
-        if 'frr_zebra_config' in opt:
-            frr_cfg.add_before(frr.default_add_before, opt['frr_zebra_config'])
-        frr_cfg.commit_configuration(zebra_daemon)
+    tmp = dict_search('tcp.mss.base', opt)
+    value = '1024' if (tmp is None) else tmp
+    sysctl_write('net.ipv4.tcp_base_mss', value)
+
+    tmp = dict_search('tcp.mss.floor', opt)
+    value = '48' if (tmp is None) else tmp
+    sysctl_write('net.ipv4.tcp_mtu_probe_floor', value)
+
+    zebra_daemon = 'zebra'
+    # Save original configuration prior to starting any commit actions
+    frr_cfg = frr.FRRConfig()
+
+    # The route-map used for the FIB (zebra) is part of the zebra daemon
+    frr_cfg.load_configuration(zebra_daemon)
+    frr_cfg.modify_section(r'ip protocol \w+ route-map [-a-zA-Z0-9.]+', stop_pattern='(\s|!)')
+    if 'frr_zebra_config' in opt:
+        frr_cfg.add_before(frr.default_add_before, opt['frr_zebra_config'])
+    frr_cfg.commit_configuration(zebra_daemon)
 
 if __name__ == '__main__':
     try:

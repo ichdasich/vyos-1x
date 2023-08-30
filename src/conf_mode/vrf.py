@@ -28,6 +28,8 @@ from vyos.template import render
 from vyos.template import render_to_string
 from vyos.utils.dict import dict_search
 from vyos.utils.network import get_interface_config
+from vyos.utils.network import get_vrf_members
+from vyos.utils.network import interface_exists
 from vyos.utils.process import call
 from vyos.utils.process import cmd
 from vyos.utils.process import popen
@@ -143,7 +145,7 @@ def verify(vrf):
                 raise ConfigError(f'VRF "{name}" table id is mandatory!')
 
             # routing table id can't be changed - OS restriction
-            if os.path.isdir(f'/sys/class/net/{name}'):
+            if interface_exists(name):
                 tmp = str(dict_search('linkinfo.info_data.table', get_interface_config(name)))
                 if tmp and tmp != vrf_config['table']:
                     raise ConfigError(f'VRF "{name}" table id modification not possible!')
@@ -195,11 +197,22 @@ def apply(vrf):
     sysctl_write('net.ipv4.udp_l3mdev_accept', bind_all)
 
     for tmp in (dict_search('vrf_remove', vrf) or []):
-        if os.path.isdir(f'/sys/class/net/{tmp}'):
-            call(f'ip link delete dev {tmp}')
+        if interface_exists(tmp):
+            # T5492: deleting a VRF instance may leafe processes running
+            # (e.g. dhclient) as there is a depedency ordering issue in the CLI.
+            # We need to ensure that we stop the dhclient processes first so
+            # a proper DHCLP RELEASE message is sent
+            for interface in get_vrf_members(tmp):
+                vrf_iface = Interface(interface)
+                vrf_iface.set_dhcp(False)
+                vrf_iface.set_dhcpv6(False)
+
             # Remove nftables conntrack zone map item
             nft_del_element = f'delete element inet vrf_zones ct_iface_map {{ "{tmp}" }}'
             cmd(f'nft {nft_del_element}')
+
+            # Delete the VRF Kernel interface
+            call(f'ip link delete dev {tmp}')
 
     if 'name' in vrf:
         # Separate VRFs in conntrack table
@@ -245,7 +258,7 @@ def apply(vrf):
 
         for name, config in vrf['name'].items():
             table = config['table']
-            if not os.path.isdir(f'/sys/class/net/{name}'):
+            if not interface_exists(name):
                 # For each VRF apart from your default context create a VRF
                 # interface with a separate routing table
                 call(f'ip link add {name} type vrf table {table}')

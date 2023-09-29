@@ -26,18 +26,18 @@ update-conflict-detection {{ dynamic_dns_update_conflict_detection if dynamic_dn
 
 {% if ddns_tsig_key is vyos_defined %}
 {%     for name, algorithm, secret in ddns_tsig_key.items() %}
-key "{{name}}" {
-        algorithm {{algorithm}};
-        secret "{{secret}}";
+key "{{ name }}" {
+        algorithm {{ algorithm }};
+        secret "{{ secret }}";
 };
 {%     endfor %}
 {% endif %}
 
 {% if ddns_upd_domain is vyos_defined %}
 {%     for name, key, primary in ddns_upd_domain.items() %}
-zone {{name}} {
-        primary {{primary}};
-        key {{key}};
+zone {{ name }} {
+        primary {{ primary }};
+        key {{ key }};
 };
 {%     endfor %}
 {% endif %}

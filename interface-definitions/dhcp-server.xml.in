@@ -67,7 +67,7 @@
                 </properties>
               </leafNode>
             </children>
-          </node>
+          </tagNode>
           <tagNode name="ddns_upd_domain">
             <properties>
               <help>Name of a ddns_upd_domain</help>
@@ -102,7 +102,7 @@
                 </properties>
               </leafNode>
             </children>
-          </node>
+          </tagNode>
           <node name="failover">
             <properties>
               <help>DHCP failover configuration</help>

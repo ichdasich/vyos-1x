@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2021-2022 VyOS maintainers and contributors
+# Copyright (C) 2021-2023 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -274,8 +274,8 @@ class TestFirewall(VyOSUnitTestSHIM.TestCase):
             ['meta l4proto gre', f'oifname != "{interface}"', 'drop'],
             ['meta l4proto icmp', f'ct mark {mark_hex}', 'return'],
             ['chain NAME_smoketest'],
-            ['saddr 172.16.20.10', 'daddr 172.16.10.10', 'log prefix "[smoketest-1-A]" log level debug', 'ip ttl 15', 'accept'],
-            ['tcp flags syn / syn,ack', 'tcp dport 8888', 'log prefix "[smoketest-2-R]" log level err', 'ip ttl > 102', 'reject'],
+            ['saddr 172.16.20.10', 'daddr 172.16.10.10', 'log prefix "[ipv4-NAM-smoketest-1-A]" log level debug', 'ip ttl 15', 'accept'],
+            ['tcp flags syn / syn,ack', 'tcp dport 8888', 'log prefix "[ipv4-NAM-smoketest-2-R]" log level err', 'ip ttl > 102', 'reject'],
             ['log prefix "[smoketest-default-D]"','smoketest default-action', 'drop']
         ]
 
@@ -331,12 +331,37 @@ class TestFirewall(VyOSUnitTestSHIM.TestCase):
             [f'meta l4proto tcp','queue to 3'],
             [f'meta l4proto udp','queue flags bypass,fanout to 0-15'],
             [f'chain NAME_{name}'],
-            ['ip length { 64, 512, 1024 }', 'ip dscp { 0x11, 0x34 }', f'log prefix "[{name}-6-A]" log group 66 snaplen 6666 queue-threshold 32000', 'accept'],
+            ['ip length { 64, 512, 1024 }', 'ip dscp { 0x11, 0x34 }', f'log prefix "[ipv4-NAM-{name}-6-A]" log group 66 snaplen 6666 queue-threshold 32000', 'accept'],
             ['ip length 1-30000', 'ip length != 60000-65535', 'ip dscp 0x03-0x0b', 'ip dscp != 0x15-0x19', 'accept'],
             [f'log prefix "[{name}-default-D]"', 'drop']
         ]
 
         self.verify_nftables(nftables_search, 'ip vyos_filter')
+
+    def test_ipv4_synproxy(self):
+        tcp_mss = '1460'
+        tcp_wscale = '7'
+        dport = '22'
+
+        self.cli_set(['firewall', 'ipv4', 'input', 'filter', 'rule', '10', 'action', 'drop'])
+        self.cli_set(['firewall', 'ipv4', 'input', 'filter', 'rule', '10', 'protocol', 'tcp'])
+        self.cli_set(['firewall', 'ipv4', 'input', 'filter', 'rule', '10', 'destination', 'port', dport])
+        self.cli_set(['firewall', 'ipv4', 'input', 'filter', 'rule', '10', 'synproxy', 'tcp', 'mss', tcp_mss])
+        self.cli_set(['firewall', 'ipv4', 'input', 'filter', 'rule', '10', 'synproxy', 'tcp', 'window-scale', tcp_wscale])
+
+        with self.assertRaises(ConfigSessionError):
+            self.cli_commit()
+
+        self.cli_set(['firewall', 'ipv4', 'input', 'filter', 'rule', '10', 'action', 'synproxy'])
+
+        self.cli_commit()
+
+        nftables_search = [
+            [f'tcp dport {dport} ct state invalid,untracked', f'synproxy mss {tcp_mss} wscale {tcp_wscale} timestamp sack-perm']
+        ]
+
+        self.verify_nftables(nftables_search, 'ip vyos_filter')
+
 
     def test_ipv4_mask(self):
         name = 'smoketest-mask'
@@ -412,7 +437,7 @@ class TestFirewall(VyOSUnitTestSHIM.TestCase):
             ['type filter hook output priority filter; policy drop;'],
             ['meta l4proto gre', f'oifname "{interface}"', 'return'],
             [f'chain NAME6_{name}'],
-            ['saddr 2002::1', 'daddr 2002::1:1', 'log prefix "[v6-smoketest-1-A]" log level crit', 'accept'],
+            ['saddr 2002::1', 'daddr 2002::1:1', 'log prefix "[ipv6-NAM-v6-smoketest-1-A]" log level crit', 'accept'],
             [f'"{name} default-action drop"', f'log prefix "[{name}-default-D]"', 'drop']
         ]
 
@@ -503,12 +528,15 @@ class TestFirewall(VyOSUnitTestSHIM.TestCase):
         self.cli_set(['firewall', 'ipv4', 'name', name, 'rule', '2', 'state', 'invalid', 'enable'])
         self.cli_set(['firewall', 'ipv4', 'name', name, 'rule', '3', 'action', 'accept'])
         self.cli_set(['firewall', 'ipv4', 'name', name, 'rule', '3', 'state', 'new', 'enable'])
-
         self.cli_set(['firewall', 'ipv4', 'name', name, 'rule', '3', 'connection-status', 'nat', 'destination'])
         self.cli_set(['firewall', 'ipv4', 'name', name, 'rule', '4', 'action', 'accept'])
         self.cli_set(['firewall', 'ipv4', 'name', name, 'rule', '4', 'state', 'new', 'enable'])
         self.cli_set(['firewall', 'ipv4', 'name', name, 'rule', '4', 'state', 'established', 'enable'])
         self.cli_set(['firewall', 'ipv4', 'name', name, 'rule', '4', 'connection-status', 'nat', 'source'])
+        self.cli_set(['firewall', 'ipv4', 'name', name, 'rule', '5', 'action', 'accept'])
+        self.cli_set(['firewall', 'ipv4', 'name', name, 'rule', '5', 'state', 'related', 'enable'])
+        self.cli_set(['firewall', 'ipv4', 'name', name, 'rule', '5', 'conntrack-helper', 'ftp'])
+        self.cli_set(['firewall', 'ipv4', 'name', name, 'rule', '5', 'conntrack-helper', 'pptp'])
 
         self.cli_commit()
 
@@ -517,35 +545,75 @@ class TestFirewall(VyOSUnitTestSHIM.TestCase):
             ['ct state invalid', 'reject'],
             ['ct state new', 'ct status dnat', 'accept'],
             ['ct state { established, new }', 'ct status snat', 'accept'],
+            ['ct state related', 'ct helper { "ftp", "pptp" }', 'accept'],
             ['drop', f'comment "{name} default-action drop"']
         ]
 
         self.verify_nftables(nftables_search, 'ip vyos_filter')
 
         # Check conntrack
-        self.verify_nftables_chain([['accept']], 'raw', 'FW_CONNTRACK')
-        self.verify_nftables_chain([['return']], 'ip6 raw', 'FW_CONNTRACK')
+        self.verify_nftables_chain([['accept']], 'ip vyos_conntrack', 'FW_CONNTRACK')
+        self.verify_nftables_chain([['return']], 'ip6 vyos_conntrack', 'FW_CONNTRACK')
+
+    def test_bridge_basic_rules(self):
+        name = 'smoketest'
+        interface_in = 'eth0'
+        mac_address = '00:53:00:00:00:01'
+        vlan_id = '12'
+        vlan_prior = '3'
+
+        self.cli_set(['firewall', 'bridge', 'name', name, 'default-action', 'accept'])
+        self.cli_set(['firewall', 'bridge', 'name', name, 'enable-default-log'])
+        self.cli_set(['firewall', 'bridge', 'name', name, 'rule', '1', 'action', 'accept'])
+        self.cli_set(['firewall', 'bridge', 'name', name, 'rule', '1', 'source', 'mac-address', mac_address])
+        self.cli_set(['firewall', 'bridge', 'name', name, 'rule', '1', 'inbound-interface', 'interface-name', interface_in])
+        self.cli_set(['firewall', 'bridge', 'name', name, 'rule', '1', 'log', 'enable'])
+        self.cli_set(['firewall', 'bridge', 'name', name, 'rule', '1', 'log-options', 'level', 'crit'])
+
+        self.cli_set(['firewall', 'bridge', 'forward', 'filter', 'default-action', 'drop'])
+        self.cli_set(['firewall', 'bridge', 'forward', 'filter', 'rule', '1', 'action', 'accept'])
+        self.cli_set(['firewall', 'bridge', 'forward', 'filter', 'rule', '1', 'vlan', 'id', vlan_id])
+        self.cli_set(['firewall', 'bridge', 'forward', 'filter', 'rule', '2', 'action', 'jump'])
+        self.cli_set(['firewall', 'bridge', 'forward', 'filter', 'rule', '2', 'jump-target', name])
+        self.cli_set(['firewall', 'bridge', 'forward', 'filter', 'rule', '2', 'vlan', 'priority', vlan_prior])
+
+        self.cli_commit()
+
+        nftables_search = [
+            ['chain VYOS_FORWARD_filter'],
+            ['type filter hook forward priority filter; policy drop;'],
+            [f'vlan id {vlan_id}', 'accept'],
+            [f'vlan pcp {vlan_prior}', f'jump NAME_{name}'],
+            [f'chain NAME_{name}'],
+            [f'ether saddr {mac_address}', f'iifname "{interface_in}"', f'log prefix "[bri-NAM-{name}-1-A]" log level crit', 'accept']
+        ]
+
+        self.verify_nftables(nftables_search, 'bridge vyos_filter')
 
     def test_source_validation(self):
         # Strict
         self.cli_set(['firewall', 'global-options', 'source-validation', 'strict'])
+        self.cli_set(['firewall', 'global-options', 'ipv6-source-validation', 'strict'])
         self.cli_commit()
 
         nftables_strict_search = [
             ['fib saddr . iif oif 0', 'drop']
         ]
 
-        self.verify_nftables(nftables_strict_search, 'inet vyos_global_rpfilter')
+        self.verify_nftables_chain(nftables_strict_search, 'ip raw', 'vyos_global_rpfilter')
+        self.verify_nftables_chain(nftables_strict_search, 'ip6 raw', 'vyos_global_rpfilter')
 
         # Loose
         self.cli_set(['firewall', 'global-options', 'source-validation', 'loose'])
+        self.cli_set(['firewall', 'global-options', 'ipv6-source-validation', 'loose'])
         self.cli_commit()
 
         nftables_loose_search = [
             ['fib saddr oif 0', 'drop']
         ]
 
-        self.verify_nftables(nftables_loose_search, 'inet vyos_global_rpfilter')
+        self.verify_nftables_chain(nftables_loose_search, 'ip raw', 'vyos_global_rpfilter')
+        self.verify_nftables_chain(nftables_loose_search, 'ip6 raw', 'vyos_global_rpfilter')
 
     def test_sysfs(self):
         for name, conf in sysfs_config.items():
@@ -563,6 +631,44 @@ class TestFirewall(VyOSUnitTestSHIM.TestCase):
             for path in paths:
                 with open(path, 'r') as f:
                     self.assertNotEqual(f.read().strip(), conf['default'], msg=path)
+
+    def test_flow_offload(self):
+        self.cli_set(['firewall', 'flowtable', 'smoketest', 'interface', 'eth0'])
+        self.cli_set(['firewall', 'flowtable', 'smoketest', 'offload', 'hardware'])
+
+        # QEMU virtual NIC does not support hw-tc-offload
+        with self.assertRaises(ConfigSessionError):
+            self.cli_commit()
+
+        self.cli_set(['firewall', 'flowtable', 'smoketest', 'offload', 'software'])
+
+        self.cli_set(['firewall', 'ipv4', 'forward', 'filter', 'rule', '1', 'action', 'offload'])
+        self.cli_set(['firewall', 'ipv4', 'forward', 'filter', 'rule', '1', 'offload-target', 'smoketest'])
+        self.cli_set(['firewall', 'ipv4', 'forward', 'filter', 'rule', '1', 'protocol', 'tcp_udp'])
+        self.cli_set(['firewall', 'ipv4', 'forward', 'filter', 'rule', '1', 'state', 'established', 'enable'])
+        self.cli_set(['firewall', 'ipv4', 'forward', 'filter', 'rule', '1', 'state', 'related', 'enable'])
+
+        self.cli_set(['firewall', 'ipv6', 'forward', 'filter', 'rule', '1', 'action', 'offload'])
+        self.cli_set(['firewall', 'ipv6', 'forward', 'filter', 'rule', '1', 'offload-target', 'smoketest'])
+        self.cli_set(['firewall', 'ipv6', 'forward', 'filter', 'rule', '1', 'protocol', 'tcp_udp'])
+        self.cli_set(['firewall', 'ipv6', 'forward', 'filter', 'rule', '1', 'state', 'established', 'enable'])
+        self.cli_set(['firewall', 'ipv6', 'forward', 'filter', 'rule', '1', 'state', 'related', 'enable'])
+
+        self.cli_commit()
+
+        nftables_search = [
+            ['flowtable VYOS_FLOWTABLE_smoketest'],
+            ['hook ingress priority filter'],
+            ['devices = { eth0 }'],
+            ['ct state { established, related }', 'meta l4proto { tcp, udp }', 'flow add @VYOS_FLOWTABLE_smoketest'],
+        ]
+
+        self.verify_nftables(nftables_search, 'ip vyos_filter')
+        self.verify_nftables(nftables_search, 'ip6 vyos_filter')
+
+        # Check conntrack
+        self.verify_nftables_chain([['accept']], 'ip vyos_conntrack', 'FW_CONNTRACK')
+        self.verify_nftables_chain([['accept']], 'ip6 vyos_conntrack', 'FW_CONNTRACK')
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

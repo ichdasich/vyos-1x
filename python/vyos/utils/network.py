@@ -40,12 +40,18 @@ def interface_exists(interface) -> bool:
     import os
     return os.path.exists(f'/sys/class/net/{interface}')
 
-def interface_exists_in_netns(interface_name, netns):
+def is_netns_interface(interface, netns):
     from vyos.utils.process import rc_cmd
-    rc, out = rc_cmd(f'ip netns exec {netns} ip link show dev {interface_name}')
+    rc, out = rc_cmd(f'sudo ip netns exec {netns} ip link show dev {interface}')
     if rc == 0:
         return True
     return False
+
+def get_netns_all() -> list:
+    from json import loads
+    from vyos.utils.process import cmd
+    tmp = loads(cmd('ip --json netns ls'))
+    return [ netns['name'] for netns in tmp ]
 
 def get_vrf_members(vrf: str) -> list:
     """
@@ -78,8 +84,7 @@ def get_interface_config(interface):
     """ Returns the used encapsulation protocol for given interface.
         If interface does not exist, None is returned.
     """
-    import os
-    if not os.path.exists(f'/sys/class/net/{interface}'):
+    if not interface_exists(interface):
         return None
     from json import loads
     from vyos.utils.process import cmd
@@ -90,32 +95,62 @@ def get_interface_address(interface):
     """ Returns the used encapsulation protocol for given interface.
         If interface does not exist, None is returned.
     """
-    import os
-    if not os.path.exists(f'/sys/class/net/{interface}'):
+    if not interface_exists(interface):
         return None
     from json import loads
     from vyos.utils.process import cmd
     tmp = loads(cmd(f'ip --detail --json addr show dev {interface}'))[0]
     return tmp
 
-def get_interface_namespace(iface):
+def get_interface_namespace(interface: str):
     """
        Returns wich netns the interface belongs to
     """
     from json import loads
     from vyos.utils.process import cmd
-    # Check if netns exist
-    tmp = loads(cmd(f'ip --json netns ls'))
-    if len(tmp) == 0:
-        return None
 
-    for ns in tmp:
+    # Bail out early if netns does not exist
+    tmp = cmd(f'ip --json netns ls')
+    if not tmp: return None
+
+    for ns in loads(tmp):
         netns = f'{ns["name"]}'
         # Search interface in each netns
         data = loads(cmd(f'ip netns exec {netns} ip --json link show'))
         for tmp in data:
-            if iface == tmp["ifname"]:
+            if interface == tmp["ifname"]:
                 return netns
+
+def is_ipv6_tentative(iface: str, ipv6_address: str) -> bool:
+    """Check if IPv6 address is in tentative state.
+
+    This function checks if an IPv6 address on a specific network interface is
+    in the tentative state. IPv6 tentative addresses are not fully configured
+    and are undergoing Duplicate Address Detection (DAD) to ensure they are
+    unique on the network.
+
+    Args:
+        iface (str): The name of the network interface.
+        ipv6_address (str): The IPv6 address to check.
+
+    Returns:
+        bool: True if the IPv6 address is tentative, False otherwise.
+    """
+    import json
+    from vyos.utils.process import rc_cmd
+
+    rc, out = rc_cmd(f'ip -6 --json address show dev {iface}')
+    if rc:
+        return False
+
+    data = json.loads(out)
+    for addr_info in data[0]['addr_info']:
+        if (
+            addr_info.get('local') == ipv6_address and
+            addr_info.get('tentative', False)
+        ):
+            return True
+    return False
 
 def is_wwan_connected(interface):
     """ Determine if a given WWAN interface, e.g. wwan0 is connected to the
@@ -141,8 +176,7 @@ def is_wwan_connected(interface):
 
 def get_bridge_fdb(interface):
     """ Returns the forwarding database entries for a given interface """
-    import os
-    if not os.path.exists(f'/sys/class/net/{interface}'):
+    if not interface_exists(interface):
         return None
     from json import loads
     from vyos.utils.process import cmd
@@ -274,57 +308,33 @@ def is_addr_assigned(ip_address, vrf=None) -> bool:
 
     return False
 
-def is_intf_addr_assigned(intf, address) -> bool:
+def is_intf_addr_assigned(ifname: str, addr: str, netns: str=None) -> bool:
     """
     Verify if the given IPv4/IPv6 address is assigned to specific interface.
     It can check both a single IP address (e.g. 192.0.2.1 or a assigned CIDR
     address 192.0.2.1/24.
     """
-    from vyos.template import is_ipv4
+    import json
+    import jmespath
 
-    from netifaces import ifaddresses
-    from netifaces import AF_INET
-    from netifaces import AF_INET6
+    from vyos.utils.process import rc_cmd
+    from ipaddress import ip_interface
 
-    # check if the requested address type is configured at all
-    # {
-    # 17: [{'addr': '08:00:27:d9:5b:04', 'broadcast': 'ff:ff:ff:ff:ff:ff'}],
-    # 2:  [{'addr': '10.0.2.15', 'netmask': '255.255.255.0', 'broadcast': '10.0.2.255'}],
-    # 10: [{'addr': 'fe80::a00:27ff:fed9:5b04%eth0', 'netmask': 'ffff:ffff:ffff:ffff::'}]
-    # }
-    try:
-        addresses = ifaddresses(intf)
-    except ValueError as e:
-        print(e)
-        return False
-
-    # determine IP version (AF_INET or AF_INET6) depending on passed address
-    addr_type = AF_INET if is_ipv4(address) else AF_INET6
-
-    # Check every IP address on this interface for a match
-    netmask = None
-    if '/' in address:
-        address, netmask = address.split('/')
-    for ip in addresses.get(addr_type, []):
-        # ip can have the interface name in the 'addr' field, we need to remove it
-        # {'addr': 'fe80::a00:27ff:fec5:f821%eth2', 'netmask': 'ffff:ffff:ffff:ffff::'}
-        ip_addr = ip['addr'].split('%')[0]
-
-        if not _are_same_ip(address, ip_addr):
-            continue
-
-        # we do not have a netmask to compare against, they are the same
-        if not netmask:
-            return True
-
-        prefixlen = ''
-        if is_ipv4(ip_addr):
-            prefixlen = sum([bin(int(_)).count('1') for _ in ip['netmask'].split('.')])
-        else:
-            prefixlen = sum([bin(int(_,16)).count('1') for _ in ip['netmask'].split('/')[0].split(':') if _])
-
-        if str(prefixlen) == netmask:
-            return True
+    netns_cmd = f'ip netns exec {netns}' if netns else ''
+    rc, out = rc_cmd(f'{netns_cmd} ip --json address show dev {ifname}')
+    if rc == 0:
+        json_out = json.loads(out)
+        addresses = jmespath.search("[].addr_info[].{family: family, address: local, prefixlen: prefixlen}", json_out)
+        for address_info in addresses:
+            family = address_info['family']
+            address = address_info['address']
+            prefixlen = address_info['prefixlen']
+            # Remove the interface name if present in the given address
+            if '%' in addr:
+                addr = addr.split('%')[0]
+            interface = ip_interface(f"{address}/{prefixlen}")
+            if ip_interface(addr) == interface or address == addr:
+                return True
 
     return False
 
@@ -398,7 +408,7 @@ def is_subnet_connected(subnet, primary=False):
 
     return False
 
-def is_afi_configured(interface, afi):
+def is_afi_configured(interface: str, afi):
     """ Check if given address family is configured, or in other words - an IP
     address is assigned to the interface. """
     from netifaces import ifaddresses
@@ -415,3 +425,46 @@ def is_afi_configured(interface, afi):
         return False
 
     return afi in addresses
+
+def get_vxlan_vlan_tunnels(interface: str) -> list:
+    """ Return a list of strings with VLAN IDs configured in the Kernel """
+    from json import loads
+    from vyos.utils.process import cmd
+
+    if not interface.startswith('vxlan'):
+        raise ValueError('Only applicable for VXLAN interfaces!')
+
+    # Determine current OS Kernel configured VLANs
+    #
+    # $ bridge -j -p vlan tunnelshow dev vxlan0
+    # [ {
+    #         "ifname": "vxlan0",
+    #         "tunnels": [ {
+    #                 "vlan": 10,
+    #                 "vlanEnd": 11,
+    #                 "tunid": 10010,
+    #                 "tunidEnd": 10011
+    #             },{
+    #                 "vlan": 20,
+    #                 "tunid": 10020
+    #             } ]
+    #     } ]
+    #
+    os_configured_vlan_ids = []
+    tmp = loads(cmd(f'bridge --json vlan tunnelshow dev {interface}'))
+    if tmp:
+        for tunnel in tmp[0].get('tunnels', {}):
+            vlanStart = tunnel['vlan']
+            if 'vlanEnd' in tunnel:
+                vlanEnd = tunnel['vlanEnd']
+                # Build a real list for user VLAN IDs
+                vlan_list = list(range(vlanStart, vlanEnd +1))
+                # Convert list of integers to list or strings
+                os_configured_vlan_ids.extend(map(str, vlan_list))
+                # Proceed with next tunnel - this one is complete
+                continue
+
+            # Add single tunel id - not part of a range
+            os_configured_vlan_ids.append(str(vlanStart))
+
+    return os_configured_vlan_ids

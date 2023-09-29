@@ -3,7 +3,7 @@
   <properties>
     <help>Default-action for rule-set</help>
     <completionHelp>
-      <list>drop jump reject return accept</list>
+      <list>drop jump reject return accept continue</list>
     </completionHelp>
     <valueHelp>
       <format>drop</format>
@@ -25,8 +25,12 @@
       <format>accept</format>
       <description>Accept if no prior rules are hit</description>
     </valueHelp>
+    <valueHelp>
+      <format>continue</format>
+      <description>Continue parsing next rule</description>
+    </valueHelp>
     <constraint>
-      <regex>(drop|jump|reject|return|accept)</regex>
+      <regex>(drop|jump|reject|return|accept|continue)</regex>
     </constraint>
   </properties>
   <defaultValue>drop</defaultValue>

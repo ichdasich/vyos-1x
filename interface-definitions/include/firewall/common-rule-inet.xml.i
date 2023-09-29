@@ -4,6 +4,7 @@
 #include <include/firewall/dscp.xml.i>
 #include <include/firewall/packet-options.xml.i>
 #include <include/firewall/connection-mark.xml.i>
+#include <include/firewall/conntrack-helper.xml.i>
 #include <include/firewall/nft-queue.xml.i>
 <leafNode name="disable">
   <properties>
@@ -219,6 +220,7 @@
     </leafNode>
   </children>
 </node>
+#include <include/firewall/synproxy.xml.i>
 <node name="state">
   <properties>
     <help>Session state</help>
@@ -303,6 +305,7 @@
   </children>
 </node>
 #include <include/firewall/tcp-flags.xml.i>
+#include <include/firewall/tcp-mss.xml.i>
 <node name="time">
   <properties>
     <help>Time to match rule</help>

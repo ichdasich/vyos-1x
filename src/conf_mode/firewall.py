@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2021-2022 VyOS maintainers and contributors
+# Copyright (C) 2021-2023 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -26,7 +26,8 @@ from vyos.config import Config
 from vyos.configdict import node_changed
 from vyos.configdiff import get_config_diff, Diff
 from vyos.configdep import set_dependents, call_dependents
-# from vyos.configverify import verify_interface_exists
+from vyos.configverify import verify_interface_exists
+from vyos.ethtool import Ethtool
 from vyos.firewall import fqdn_config_parse
 from vyos.firewall import geoip_update
 from vyos.template import render
@@ -38,6 +39,7 @@ from vyos.utils.process import process_named_running
 from vyos.utils.process import rc_cmd
 from vyos import ConfigError
 from vyos import airbag
+
 airbag.enable()
 
 nat_conf_script = 'nat.py'
@@ -100,7 +102,7 @@ def geoip_updated(conf, firewall):
         elif (path[0] == 'ipv6'):
             set_name = f'GEOIP_CC6_{path[1]}_{path[2]}_{path[4]}'
             out['ipv6_name'].append(set_name)
-            
+
         updated = True
 
     if 'delete' in node_diff:
@@ -140,6 +142,8 @@ def get_config(config=None):
 
     fqdn_config_parse(firewall)
 
+    set_dependents('conntrack', conf)
+
     return firewall
 
 def verify_rule(firewall, rule_conf, ipv6):
@@ -159,6 +163,25 @@ def verify_rule(firewall, rule_conf, ipv6):
         else:
             if target not in dict_search_args(firewall, 'ipv6', 'name'):
                 raise ConfigError(f'Invalid jump-target. Firewall ipv6 name {target} does not exist on the system')
+
+    if rule_conf['action'] == 'offload':
+        if 'offload_target' not in rule_conf:
+            raise ConfigError('Action set to offload, but no offload-target specified')
+
+        offload_target = rule_conf['offload_target']
+
+        if not dict_search_args(firewall, 'flowtable', offload_target):
+            raise ConfigError(f'Invalid offload-target. Flowtable "{offload_target}" does not exist on the system')
+
+    if rule_conf['action'] != 'synproxy' and 'synproxy' in rule_conf:
+        raise ConfigError('"synproxy" option allowed only for action synproxy')
+    if rule_conf['action'] == 'synproxy':
+        if 'state' in rule_conf:
+            raise ConfigError('For action "synproxy" state cannot be defined')
+        if not rule_conf.get('synproxy', {}).get('tcp'):
+            raise ConfigError('synproxy TCP MSS is not defined')
+        if rule_conf.get('protocol', {}) != 'tcp':
+            raise ConfigError('For action "synproxy" the protocol must be set to TCP')
 
     if 'queue_options' in rule_conf:
         if 'queue' not in rule_conf['action']:
@@ -279,7 +302,31 @@ def verify_nested_group(group_name, group, groups, seen):
         if 'include' in groups[g]:
             verify_nested_group(g, groups[g], groups, seen)
 
+def verify_hardware_offload(ifname):
+    ethtool = Ethtool(ifname)
+    enabled, fixed = ethtool.get_hw_tc_offload()
+
+    if not enabled and fixed:
+        raise ConfigError(f'Interface "{ifname}" does not support hardware offload')
+
+    if not enabled:
+        raise ConfigError(f'Interface "{ifname}" requires "offload hw-tc-offload"')
+
 def verify(firewall):
+    if 'flowtable' in firewall:
+        for flowtable, flowtable_conf in firewall['flowtable'].items():
+            if 'interface' not in flowtable_conf:
+                raise ConfigError(f'Flowtable "{flowtable}" requires at least one interface')
+
+            for ifname in flowtable_conf['interface']:
+                verify_interface_exists(ifname)
+
+            if dict_search_args(flowtable_conf, 'offload') == 'hardware':
+                interfaces = flowtable_conf['interface']
+
+                for ifname in interfaces:
+                    verify_hardware_offload(ifname)
+
     if 'group' in firewall:
         for group_type in nested_group_types:
             if group_type in firewall['group']:
@@ -333,17 +380,6 @@ def generate(firewall):
     if not os.path.exists(nftables_conf):
         firewall['first_install'] = True
 
-    # Determine if conntrack is needed
-    firewall['ipv4_conntrack_action'] = 'return'
-    firewall['ipv6_conntrack_action'] = 'return'
-
-    for rules, path in dict_search_recursive(firewall, 'rule'):
-        if any(('state' in rule_conf or 'connection_status' in rule_conf) for rule_conf in rules.values()):
-            if path[0] == 'ipv4':
-                firewall['ipv4_conntrack_action'] = 'accept'
-            elif path[0] == 'ipv6':
-                firewall['ipv6_conntrack_action'] = 'accept'
-
     render(nftables_conf, 'firewall/nftables.j2', firewall)
     return None
 
@@ -373,8 +409,7 @@ def apply(firewall):
 
     apply_sysfs(firewall)
 
-    if firewall['group_resync']:
-        call_dependents()
+    call_dependents()
 
     # T970 Enable a resolver (systemd daemon) that checks
     # domain-group/fqdn addresses and update entries for domains by timeout

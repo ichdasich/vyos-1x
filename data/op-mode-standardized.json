@@ -16,6 +16,7 @@
 "neighbor.py",
 "nhrp.py",
 "openconnect.py",
+"otp.py",
 "openvpn.py",
 "reset_vpn.py",
 "reverseproxy.py",
@@ -25,6 +26,5 @@
 "storage.py",
 "uptime.py",
 "version.py",
-"vrf.py",
-"zone.py"
+"vrf.py"
 ]

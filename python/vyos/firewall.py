@@ -87,13 +87,34 @@ def nft_action(vyos_action):
 
 def parse_rule(rule_conf, hook, fw_name, rule_id, ip_name):
     output = []
-    def_suffix = '6' if ip_name == 'ip6' else ''
+    #def_suffix = '6' if ip_name == 'ip6' else ''
+
+    if ip_name == 'ip6':
+        def_suffix = '6'
+        family = 'ipv6'
+    else:
+        def_suffix = ''
+        family = 'bri' if ip_name == 'bri' else 'ipv4'
 
     if 'state' in rule_conf and rule_conf['state']:
         states = ",".join([s for s, v in rule_conf['state'].items() if v == 'enable'])
 
         if states:
             output.append(f'ct state {{{states}}}')
+
+    if 'conntrack_helper' in rule_conf:
+        helper_map = {'h323': ['RAS', 'Q.931'], 'nfs': ['rpc'], 'sqlnet': ['tns']}
+        helper_out = []
+
+        for helper in rule_conf['conntrack_helper']:
+            if helper in helper_map:
+                helper_out.extend(helper_map[helper])
+            else:
+                helper_out.append(helper)
+
+        if helper_out:
+            helper_str = ','.join(f'"{s}"' for s in helper_out)
+            output.append(f'ct helper {{{helper_str}}}')
 
     if 'connection_status' in rule_conf and rule_conf['connection_status']:
         status = rule_conf['connection_status']
@@ -242,27 +263,8 @@ def parse_rule(rule_conf, hook, fw_name, rule_id, ip_name):
 
                     output.append(f'{proto} {prefix}port {operator} @P_{group_name}')
 
-    if 'log' in rule_conf and rule_conf['log'] == 'enable':
-        action = rule_conf['action'] if 'action' in rule_conf else 'accept'
-        output.append(f'log prefix "[{fw_name[:19]}-{rule_id}-{action[:1].upper()}]"')
-
-        if 'log_options' in rule_conf:
-
-            if 'level' in rule_conf['log_options']:
-                log_level = rule_conf['log_options']['level']
-                output.append(f'log level {log_level}')
-
-            if 'group' in rule_conf['log_options']:
-                log_group = rule_conf['log_options']['group']
-                output.append(f'log group {log_group}')
-
-                if 'queue_threshold' in rule_conf['log_options']:
-                    queue_threshold = rule_conf['log_options']['queue_threshold']
-                    output.append(f'queue-threshold {queue_threshold}')
-
-                if 'snapshot_length' in rule_conf['log_options']:
-                    log_snaplen = rule_conf['log_options']['snapshot_length']
-                    output.append(f'snaplen {log_snaplen}')
+    if dict_search_args(rule_conf, 'action') == 'synproxy':
+        output.append('ct state invalid,untracked')
 
     if 'hop_limit' in rule_conf:
         operators = {'eq': '==', 'gt': '>', 'lt': '<'}
@@ -379,6 +381,35 @@ def parse_rule(rule_conf, hook, fw_name, rule_id, ip_name):
         conn_mark_str = ','.join(rule_conf['connection_mark'])
         output.append(f'ct mark {{{conn_mark_str}}}')
 
+    if 'vlan' in rule_conf:
+        if 'id' in rule_conf['vlan']:
+            output.append(f'vlan id {rule_conf["vlan"]["id"]}')
+        if 'priority' in rule_conf['vlan']:
+            output.append(f'vlan pcp {rule_conf["vlan"]["priority"]}')
+
+    if 'log' in rule_conf and rule_conf['log'] == 'enable':
+        action = rule_conf['action'] if 'action' in rule_conf else 'accept'
+        #output.append(f'log prefix "[{fw_name[:19]}-{rule_id}-{action[:1].upper()}]"')
+        output.append(f'log prefix "[{family}-{hook}-{fw_name}-{rule_id}-{action[:1].upper()}]"')
+                        ##{family}-{hook}-{fw_name}-{rule_id}
+        if 'log_options' in rule_conf:
+
+            if 'level' in rule_conf['log_options']:
+                log_level = rule_conf['log_options']['level']
+                output.append(f'log level {log_level}')
+
+            if 'group' in rule_conf['log_options']:
+                log_group = rule_conf['log_options']['group']
+                output.append(f'log group {log_group}')
+
+                if 'queue_threshold' in rule_conf['log_options']:
+                    queue_threshold = rule_conf['log_options']['queue_threshold']
+                    output.append(f'queue-threshold {queue_threshold}')
+
+                if 'snapshot_length' in rule_conf['log_options']:
+                    log_snaplen = rule_conf['log_options']['snapshot_length']
+                    output.append(f'snaplen {log_snaplen}')
+
     output.append('counter')
 
     if 'set' in rule_conf:
@@ -387,24 +418,38 @@ def parse_rule(rule_conf, hook, fw_name, rule_id, ip_name):
     if 'action' in rule_conf:
         # Change action=return to action=action
         # #output.append(nft_action(rule_conf['action']))
-        output.append(f'{rule_conf["action"]}')
-        if 'jump' in rule_conf['action']:
-            target = rule_conf['jump_target']
-            output.append(f'NAME{def_suffix}_{target}')
+        if rule_conf['action'] == 'offload':
+            offload_target = rule_conf['offload_target']
+            output.append(f'flow add @VYOS_FLOWTABLE_{offload_target}')
+        else:
+            output.append(f'{rule_conf["action"]}')
 
-        if 'queue' in rule_conf['action']:
-            if 'queue' in rule_conf:
-                target = rule_conf['queue']
-                output.append(f'num {target}')
+            if 'jump' in rule_conf['action']:
+                target = rule_conf['jump_target']
+                output.append(f'NAME{def_suffix}_{target}')
 
-            if 'queue_options' in rule_conf:
-                queue_opts = ','.join(rule_conf['queue_options'])
-                output.append(f'{queue_opts}')
+            if 'queue' in rule_conf['action']:
+                if 'queue' in rule_conf:
+                    target = rule_conf['queue']
+                    output.append(f'num {target}')
+
+                if 'queue_options' in rule_conf:
+                    queue_opts = ','.join(rule_conf['queue_options'])
+                    output.append(f'{queue_opts}')
+
+        # Synproxy
+        if 'synproxy' in rule_conf:
+            synproxy_mss = dict_search_args(rule_conf, 'synproxy', 'tcp', 'mss')
+            if synproxy_mss:
+                output.append(f'mss {synproxy_mss}')
+            synproxy_ws = dict_search_args(rule_conf, 'synproxy', 'tcp', 'window_scale')
+            if synproxy_ws:
+                output.append(f'wscale {synproxy_ws} timestamp sack-perm')
 
     else:
         output.append('return')
 
-    output.append(f'comment "{hook}-{fw_name}-{rule_id}"')
+    output.append(f'comment "{family}-{hook}-{fw_name}-{rule_id}"')
     return " ".join(output)
 
 def parse_tcp_flags(flags):

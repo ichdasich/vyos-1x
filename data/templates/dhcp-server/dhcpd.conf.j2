@@ -21,8 +21,8 @@ on expiry {
 ddns-updates {{ 'on' if dynamic_dns_update is vyos_defined else 'off' }};
 ddns-update-style {{ 'interim' if dynamic_dns_update is vyos_defined else 'none' }};
 ddns-ttl {{ dynamic_dns_update_ttl if dynamic_dns_update_ttl is vyos_defined else '300' }};
-ddns-domainname {{ dynamic_dns_update_domain if dynamic_dns_update_domain is vyos_defined else 'example.com' }};
-update-conflict-detection {{ dynamic_dns_update_conflict_detection if dynamic_dns_update_conflict_detection is vyos_defined else 'off' }};;
+ddns-domainname "{{ dynamic_dns_update_domain if dynamic_dns_update_domain is vyos_defined else 'example.com' }}";
+update-conflict-detection {{ dynamic_dns_update_conflict_detection if dynamic_dns_update_conflict_detection is vyos_defined else 'off' }};
 
 {% if ddns_tsig_key is vyos_defined %}
 {%     for name, algorithm, secret in ddns_tsig_key.items() %}

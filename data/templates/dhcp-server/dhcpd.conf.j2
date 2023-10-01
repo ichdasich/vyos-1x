@@ -29,7 +29,7 @@ update-conflict-detection {{ dynamic_dns_update_conflict_detection if dynamic_dn
 key "{{ key_name }}" {
         algorithm {{ key_config.algorithm }};
         secret "{{ key_config.secret }}";
-};
+}
 {%     endfor %}
 {% endif %}
 
@@ -38,7 +38,7 @@ key "{{ key_name }}" {
 zone {{ domain_name }} {
         primary {{ domain_config.primary }};
         key {{ domain_config.key }};
-};
+}
 {%     endfor %}
 {% endif %}
 

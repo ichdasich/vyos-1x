@@ -19,19 +19,19 @@ ddns-ttl {{ dynamic_dns_update_ttl if dynamic_dns_update_ttl is vyos_defined els
 update-conflict-detection {{ dynamic_dns_update_conflict_detection if dynamic_dns_update_conflict_detection is vyos_defined else 'off' }};
 
 {% if ddns_tsig_key is vyos_defined %}
-{%     for name, algorithm, secret in ddns_tsig_key.items() %}
-key "{{ name }}" {
-        algorithm {{ algorithm }};
-        secret "{{ secret }}";
+{%     for key_name, key_config in ddns_tsig_key.items() %}
+key "{{ key_name }}" {
+        algorithm {{ key_config.algorithm }};
+        secret "{{ key_config.secret }}";
 };
 {%     endfor %}
 {% endif %}
 
 {% if ddns_upd_domain is vyos_defined %}
-{%     for name, key, primary in ddns_upd_domain.items() %}
-zone {{ name }} {
-        primary {{ primary }};
-        key {{ key }};
+{%     for domain_name, domain_config in ddns_upd_domain.items() %}
+zone {{ domain_name }} {
+        primary {{ domain_config.primary }};
+        key {{ domain_config.key }};
 };
 {%     endfor %}
 {% endif %}

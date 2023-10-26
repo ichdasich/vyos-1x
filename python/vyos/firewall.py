@@ -275,14 +275,14 @@ def parse_rule(rule_conf, hook, fw_name, rule_id, ip_name):
 
     if 'inbound_interface' in rule_conf:
         operator = ''
-        if 'interface_name' in rule_conf['inbound_interface']:
-            iiface = rule_conf['inbound_interface']['interface_name']
+        if 'name' in rule_conf['inbound_interface']:
+            iiface = rule_conf['inbound_interface']['name']
             if iiface[0] == '!':
                 operator = '!='
                 iiface = iiface[1:]
             output.append(f'iifname {operator} {{{iiface}}}')
         else:
-            iiface = rule_conf['inbound_interface']['interface_group']
+            iiface = rule_conf['inbound_interface']['group']
             if iiface[0] == '!':
                 operator = '!='
                 iiface = iiface[1:]
@@ -290,14 +290,14 @@ def parse_rule(rule_conf, hook, fw_name, rule_id, ip_name):
 
     if 'outbound_interface' in rule_conf:
         operator = ''
-        if 'interface_name' in rule_conf['outbound_interface']:
-            oiface = rule_conf['outbound_interface']['interface_name']
+        if 'name' in rule_conf['outbound_interface']:
+            oiface = rule_conf['outbound_interface']['name']
             if oiface[0] == '!':
                 operator = '!='
                 oiface = oiface[1:]
             output.append(f'oifname {operator} {{{oiface}}}')
         else:
-            oiface = rule_conf['outbound_interface']['interface_group']
+            oiface = rule_conf['outbound_interface']['group']
             if oiface[0] == '!':
                 operator = '!='
                 oiface = oiface[1:]
@@ -380,6 +380,14 @@ def parse_rule(rule_conf, hook, fw_name, rule_id, ip_name):
     if 'connection_mark' in rule_conf:
         conn_mark_str = ','.join(rule_conf['connection_mark'])
         output.append(f'ct mark {{{conn_mark_str}}}')
+
+    if 'mark' in rule_conf:
+        mark = rule_conf['mark']
+        operator = ''
+        if mark[0] == '!':
+            operator = '!='
+            mark = mark[1:]
+        output.append(f'meta mark {operator} {{{mark}}}')
 
     if 'vlan' in rule_conf:
         if 'id' in rule_conf['vlan']:

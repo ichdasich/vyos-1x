@@ -311,6 +311,8 @@ Depends:
   monitoring-plugins,
   munin-node,
   munin-plugins-extra,
+  libnet-netmask-perl,
+  libnet-ip-perl,
   vim
 ## End custom utilities
 Description: VyOS configuration scripts and data

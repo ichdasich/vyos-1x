@@ -129,13 +129,13 @@ def generate(munin_node):
 
 
     os.symlink('/opt/frr_routes_','/etc/munin/plugins/frr_routes_ipv4_valid')
-    os.symlink('/opt/frr_routes_','/etc/munin/plugins/frr_routes_ipv4_bestpath')
-    os.symlink('/opt/frr_routes_','/etc/munin/plugins/frr_routes_ipv4_removed')
+#    os.symlink('/opt/frr_routes_','/etc/munin/plugins/frr_routes_ipv4_bestpath')
+#    os.symlink('/opt/frr_routes_','/etc/munin/plugins/frr_routes_ipv4_removed')
     os.symlink('/opt/frr_routes_','/etc/munin/plugins/frr_routes_ipv4_sent')
 
     os.symlink('/opt/frr_routes_','/etc/munin/plugins/frr_routes_ipv6_valid')
-    os.symlink('/opt/frr_routes_','/etc/munin/plugins/frr_routes_ipv6_bestpath')
-    os.symlink('/opt/frr_routes_','/etc/munin/plugins/frr_routes_ipv6_removed')
+#    os.symlink('/opt/frr_routes_','/etc/munin/plugins/frr_routes_ipv6_bestpath')
+#    os.symlink('/opt/frr_routes_','/etc/munin/plugins/frr_routes_ipv6_removed')
     os.symlink('/opt/frr_routes_','/etc/munin/plugins/frr_routes_ipv6_sent')
 
     if os.path.isfile('/run/dhcp-server/dhcpd.conf'):

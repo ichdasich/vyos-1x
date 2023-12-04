@@ -12,9 +12,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import os
-import unittest
-
 from binascii import hexlify
 
 from netifaces import AF_INET
@@ -24,7 +21,6 @@ from netifaces import interfaces
 
 from base_vyostest_shim import VyOSUnitTestSHIM
 
-from vyos.configsession import ConfigSession
 from vyos.configsession import ConfigSessionError
 from vyos.defaults import directories
 from vyos.ifconfig import Interface
@@ -162,14 +158,22 @@ class BasicInterfaceTest:
             if not self._test_dhcp or not self._test_vrf:
                 self.skipTest('not supported')
 
+            client_id = 'VyOS-router'
             distance = '100'
+            hostname = 'vyos'
+            vendor_class_id = 'vyos-vendor'
+            user_class = 'vyos'
 
             for interface in self._interfaces:
                 for option in self._options.get(interface, []):
                     self.cli_set(self._base_path + [interface] + option.split())
 
                 self.cli_set(self._base_path + [interface, 'address', 'dhcp'])
+                self.cli_set(self._base_path + [interface, 'dhcp-options', 'client-id', client_id])
                 self.cli_set(self._base_path + [interface, 'dhcp-options', 'default-route-distance', distance])
+                self.cli_set(self._base_path + [interface, 'dhcp-options', 'host-name', hostname])
+                self.cli_set(self._base_path + [interface, 'dhcp-options', 'vendor-class-id', vendor_class_id])
+                self.cli_set(self._base_path + [interface, 'dhcp-options', 'user-class', user_class])
 
             self.cli_commit()
 
@@ -179,8 +183,12 @@ class BasicInterfaceTest:
                 self.assertTrue(dhclient_pid)
 
                 dhclient_config = read_file(f'{dhclient_base_dir}/dhclient_{interface}.conf')
-                self.assertIn('request subnet-mask, broadcast-address, routers, domain-name-servers', dhclient_config)
-                self.assertIn('require subnet-mask;', dhclient_config)
+                self.assertIn(f'request subnet-mask, broadcast-address, routers, domain-name-servers', dhclient_config)
+                self.assertIn(f'require subnet-mask;', dhclient_config)
+                self.assertIn(f'send host-name "{hostname}";', dhclient_config)
+                self.assertIn(f'send dhcp-client-identifier "{client_id}";', dhclient_config)
+                self.assertIn(f'send vendor-class-identifier "{vendor_class_id}";', dhclient_config)
+                self.assertIn(f'send user-class "{user_class}";', dhclient_config)
 
                 # and the commandline has the appropriate options
                 cmdline = read_file(f'/proc/{dhclient_pid}/cmdline')
@@ -404,10 +412,9 @@ class BasicInterfaceTest:
 
             for intf in self._interfaces:
                 base = self._base_path + [intf]
-                self.cli_set(base + ['mtu', self._mtu])
-
                 for option in self._options.get(intf, []):
                     self.cli_set(base + option.split())
+                self.cli_set(base + ['mtu', self._mtu])
 
             # check validate() - can not set low MTU if 'no-default-link-local'
             # is not set on CLI

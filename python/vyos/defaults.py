@@ -50,15 +50,6 @@ https_data = {
     'listen_addresses' : { '*': ['_'] }
 }
 
-api_data = {
-    'listen_address' : '127.0.0.1',
-    'port' : '8080',
-    'socket' : False,
-    'strict' : False,
-    'debug' : False,
-    'api_keys' : [ {'id' : 'testapp', 'key' : 'qwerty'} ]
-}
-
 vyos_cert_data = {
     'conf' : '/etc/nginx/snippets/vyos-cert.conf',
     'crt' : '/etc/ssl/certs/vyos-selfsigned.crt',

@@ -15,6 +15,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import unittest
+import json
 
 from requests import request
 from urllib3.exceptions import InsecureRequestWarning
@@ -22,7 +23,9 @@ from urllib3.exceptions import InsecureRequestWarning
 from base_vyostest_shim import VyOSUnitTestSHIM
 from base_vyostest_shim import ignore_warning
 from vyos.utils.file import read_file
-from vyos.utils.process import run
+from vyos.utils.process import process_named_running
+
+from vyos.configsession import ConfigSessionError
 
 base_path = ['service', 'https']
 pki_base = ['pki']
@@ -48,24 +51,25 @@ MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgPLpD0Ohhoq0g4nhx
 u8/3jHMM7sDwL3aWzW/zp54/LhCWUoLMjDdDEEigK4fal4ZF9aA9F0Ww
 """
 
+PROCESS_NAME = 'nginx'
+
 class TestHTTPSService(VyOSUnitTestSHIM.TestCase):
-    def setUp(self):
+    @classmethod
+    def setUpClass(cls):
+        super(TestHTTPSService, cls).setUpClass()
+
         # ensure we can also run this test on a live system - so lets clean
         # out the current configuration :)
-        self.cli_delete(base_path)
-        self.cli_delete(pki_base)
+        cls.cli_delete(cls, base_path)
+        cls.cli_delete(cls, pki_base)
 
     def tearDown(self):
         self.cli_delete(base_path)
         self.cli_delete(pki_base)
         self.cli_commit()
 
-    def test_default(self):
-        self.cli_set(base_path)
-        self.cli_commit()
-
-        ret = run('sudo /usr/sbin/nginx -t')
-        self.assertEqual(ret, 0)
+        # Check for stopped  process
+        self.assertFalse(process_named_running(PROCESS_NAME))
 
     def test_server_block(self):
         vhost_id = 'example'
@@ -76,17 +80,15 @@ class TestHTTPSService(VyOSUnitTestSHIM.TestCase):
         test_path = base_path + ['virtual-host', vhost_id]
 
         self.cli_set(test_path + ['listen-address', address])
-        self.cli_set(test_path + ['listen-port', port])
+        self.cli_set(test_path + ['port', port])
         self.cli_set(test_path + ['server-name', name])
 
         self.cli_commit()
 
-        ret = run('sudo /usr/sbin/nginx -t')
-        self.assertEqual(ret, 0)
-
         nginx_config = read_file('/etc/nginx/sites-enabled/default')
         self.assertIn(f'listen {address}:{port} ssl;', nginx_config)
         self.assertIn(f'ssl_protocols TLSv1.2 TLSv1.3;', nginx_config)
+        self.assertTrue(process_named_running(PROCESS_NAME))
 
     def test_certificate(self):
         self.cli_set(pki_base + ['certificate', 'test_https', 'certificate', cert_data.replace('\n','')])
@@ -95,24 +97,28 @@ class TestHTTPSService(VyOSUnitTestSHIM.TestCase):
         self.cli_set(base_path + ['certificates', 'certificate', 'test_https'])
 
         self.cli_commit()
+        self.assertTrue(process_named_running(PROCESS_NAME))
 
-        ret = run('sudo /usr/sbin/nginx -t')
-        self.assertEqual(ret, 0)
+    def test_api_missing_keys(self):
+        self.cli_set(base_path + ['api'])
+        self.assertRaises(ConfigSessionError, self.cli_commit)
+
+    def test_api_incomplete_key(self):
+        self.cli_set(base_path + ['api', 'keys', 'id', 'key-01'])
+        self.assertRaises(ConfigSessionError, self.cli_commit)
 
     @ignore_warning(InsecureRequestWarning)
     def test_api_auth(self):
         vhost_id = 'example'
         address = '127.0.0.1'
-        port = '443'
+        port = '443' # default value
         name = 'localhost'
 
-        self.cli_set(base_path + ['api', 'socket'])
         key = 'MySuperSecretVyOS'
         self.cli_set(base_path + ['api', 'keys', 'id', 'key-01', 'key', key])
 
         test_path = base_path + ['virtual-host', vhost_id]
         self.cli_set(test_path + ['listen-address', address])
-        self.cli_set(test_path + ['listen-port', port])
         self.cli_set(test_path + ['server-name', name])
 
         self.cli_commit()
@@ -137,6 +143,13 @@ class TestHTTPSService(VyOSUnitTestSHIM.TestCase):
         r = request('POST', url, verify=False, headers=headers, data=payload_no_key)
         # Must get HTTP code 401 on missing key (Unauthorized)
         self.assertEqual(r.status_code, 401)
+
+        # Check path config
+        payload = {'data': '{"op": "showConfig", "path": ["system", "login"]}', 'key': f'{key}'}
+        r = request('POST', url, verify=False, headers=headers, data=payload)
+        response = r.json()
+        vyos_user_exists = 'vyos' in response.get('data', {}).get('user', {})
+        self.assertTrue(vyos_user_exists, "The 'vyos' user does not exist in the response.")
 
         # GraphQL auth test: a missing key will return status code 400, as
         # 'key' is a non-nullable field in the schema; an incorrect key is
@@ -240,5 +253,128 @@ class TestHTTPSService(VyOSUnitTestSHIM.TestCase):
         success = r.json()['data']['ShowVersion']['success']
         self.assertTrue(success)
 
+    @ignore_warning(InsecureRequestWarning)
+    def test_api_add_delete(self):
+        address = '127.0.0.1'
+        key = 'VyOS-key'
+        url = f'https://{address}/retrieve'
+        payload = {'data': '{"op": "showConfig", "path": []}', 'key': f'{key}'}
+        headers = {}
+
+        self.cli_set(base_path)
+        self.cli_commit()
+
+        r = request('POST', url, verify=False, headers=headers, data=payload)
+        # api not configured; expect 503
+        self.assertEqual(r.status_code, 503)
+
+        self.cli_set(base_path + ['api', 'keys', 'id', 'key-01', 'key', key])
+        self.cli_commit()
+
+        r = request('POST', url, verify=False, headers=headers, data=payload)
+        # api configured; expect 200
+        self.assertEqual(r.status_code, 200)
+
+        self.cli_delete(base_path + ['api'])
+        self.cli_commit()
+
+        r = request('POST', url, verify=False, headers=headers, data=payload)
+        # api deleted; expect 503
+        self.assertEqual(r.status_code, 503)
+
+    @ignore_warning(InsecureRequestWarning)
+    def test_api_show(self):
+        address = '127.0.0.1'
+        key = 'VyOS-key'
+        url = f'https://{address}/show'
+        headers = {}
+
+        self.cli_set(base_path + ['api', 'keys', 'id', 'key-01', 'key', key])
+        self.cli_commit()
+
+        payload = {
+            'data': '{"op": "show", "path": ["system", "image"]}',
+            'key': f'{key}',
+        }
+        r = request('POST', url, verify=False, headers=headers, data=payload)
+        self.assertEqual(r.status_code, 200)
+
+    @ignore_warning(InsecureRequestWarning)
+    def test_api_generate(self):
+        address = '127.0.0.1'
+        key = 'VyOS-key'
+        url = f'https://{address}/generate'
+        headers = {}
+
+        self.cli_set(base_path + ['api', 'keys', 'id', 'key-01', 'key', key])
+        self.cli_commit()
+
+        payload = {
+            'data': '{"op": "generate", "path": ["macsec", "mka", "cak", "gcm-aes-256"]}',
+            'key': f'{key}',
+        }
+        r = request('POST', url, verify=False, headers=headers, data=payload)
+        self.assertEqual(r.status_code, 200)
+
+    @ignore_warning(InsecureRequestWarning)
+    def test_api_configure(self):
+        address = '127.0.0.1'
+        key = 'VyOS-key'
+        url = f'https://{address}/configure'
+        headers = {}
+        conf_interface = 'dum0'
+        conf_address = '192.0.2.44/32'
+
+        self.cli_set(base_path + ['api', 'keys', 'id', 'key-01', 'key', key])
+        self.cli_commit()
+
+        payload_path = [
+            "interfaces",
+            "dummy",
+            f"{conf_interface}",
+            "address",
+            f"{conf_address}",
+        ]
+
+        payload = {'data': json.dumps({"op": "set", "path": payload_path}), 'key': key}
+
+        r = request('POST', url, verify=False, headers=headers, data=payload)
+        self.assertEqual(r.status_code, 200)
+
+    @ignore_warning(InsecureRequestWarning)
+    def test_api_config_file(self):
+        address = '127.0.0.1'
+        key = 'VyOS-key'
+        url = f'https://{address}/config-file'
+        headers = {}
+
+        self.cli_set(base_path + ['api', 'keys', 'id', 'key-01', 'key', key])
+        self.cli_commit()
+
+        payload = {
+            'data': '{"op": "save"}',
+            'key': f'{key}',
+        }
+        r = request('POST', url, verify=False, headers=headers, data=payload)
+        self.assertEqual(r.status_code, 200)
+
+    @ignore_warning(InsecureRequestWarning)
+    def test_api_reset(self):
+        address = '127.0.0.1'
+        key = 'VyOS-key'
+        url = f'https://{address}/reset'
+        headers = {}
+
+        self.cli_set(base_path + ['api', 'keys', 'id', 'key-01', 'key', key])
+        self.cli_commit()
+
+        payload = {
+            'data': '{"op": "reset", "path": ["ip", "arp", "table"]}',
+            'key': f'{key}',
+        }
+        r = request('POST', url, verify=False, headers=headers, data=payload)
+        self.assertEqual(r.status_code, 200)
+
+
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    unittest.main(verbosity=5)

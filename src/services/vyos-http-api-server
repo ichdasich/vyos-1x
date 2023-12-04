@@ -50,7 +50,7 @@ from vyos.configsession import ConfigSession, ConfigSessionError
 
 import api.graphql.state
 
-DEFAULT_CONFIG_FILE = '/etc/vyos/http-api.conf'
+api_config_state = '/run/http-api-state'
 CFG_GROUP = 'vyattacfg'
 
 debug = True
@@ -68,7 +68,7 @@ else:
 lock = threading.Lock()
 
 def load_server_config():
-    with open(DEFAULT_CONFIG_FILE) as f:
+    with open(api_config_state) as f:
         config = json.load(f)
     return config
 
@@ -223,6 +223,19 @@ class ShowModel(ApiModel):
             }
         }
 
+class RebootModel(ApiModel):
+    op: StrictStr
+    path: List[StrictStr]
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "key": "id_key",
+                "op": "reboot",
+                "path": ["op", "mode", "path"],
+            }
+        }
+
 class ResetModel(ApiModel):
     op: StrictStr
     path: List[StrictStr]
@@ -232,6 +245,19 @@ class ResetModel(ApiModel):
             "example": {
                 "key": "id_key",
                 "op": "reset",
+                "path": ["op", "mode", "path"],
+            }
+        }
+
+class PoweroffModel(ApiModel):
+    op: StrictStr
+    path: List[StrictStr]
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "key": "id_key",
+                "op": "poweroff",
                 "path": ["op", "mode", "path"],
             }
         }
@@ -713,6 +739,26 @@ def show_op(data: ShowModel):
 
     return success(res)
 
+@app.post('/reboot')
+def reboot_op(data: RebootModel):
+    session = app.state.vyos_session
+
+    op = data.op
+    path = data.path
+
+    try:
+        if op == 'reboot':
+            res = session.reboot(path)
+        else:
+            return error(400, f"'{op}' is not a valid operation")
+    except ConfigSessionError as e:
+        return error(400, str(e))
+    except Exception as e:
+        logger.critical(traceback.format_exc())
+        return error(500, "An internal error occured. Check the logs for details.")
+
+    return success(res)
+
 @app.post('/reset')
 def reset_op(data: ResetModel):
     session = app.state.vyos_session
@@ -723,6 +769,26 @@ def reset_op(data: ResetModel):
     try:
         if op == 'reset':
             res = session.reset(path)
+        else:
+            return error(400, f"'{op}' is not a valid operation")
+    except ConfigSessionError as e:
+        return error(400, str(e))
+    except Exception as e:
+        logger.critical(traceback.format_exc())
+        return error(500, "An internal error occured. Check the logs for details.")
+
+    return success(res)
+
+@app.post('/poweroff')
+def poweroff_op(data: PoweroffModel):
+    session = app.state.vyos_session
+
+    op = data.op
+    path = data.path
+
+    try:
+        if op == 'poweroff':
+            res = session.poweroff(path)
         else:
             return error(400, f"'{op}' is not a valid operation")
     except ConfigSessionError as e:
@@ -794,19 +860,28 @@ def shutdown_handler(signum, frame):
     logger.info('Server shutdown...')
     shutdown = True
 
+def flatten_keys(d: dict) -> list[dict]:
+    keys_list = []
+    for el in list(d['keys'].get('id', {})):
+        key = d['keys']['id'][el].get('key', '')
+        if key:
+            keys_list.append({'id': el, 'key': key})
+    return keys_list
+
 def initialization(session: ConfigSession, app: FastAPI = app):
     global server
     try:
         server_config = load_server_config()
+        keys = flatten_keys(server_config)
     except Exception as e:
         logger.critical(f'Failed to load the HTTP API server config: {e}')
         sys.exit(1)
 
     app.state.vyos_session = session
-    app.state.vyos_keys = server_config['api_keys']
+    app.state.vyos_keys = keys
 
-    app.state.vyos_debug = server_config['debug']
-    app.state.vyos_strict = server_config['strict']
+    app.state.vyos_debug = bool('debug' in server_config)
+    app.state.vyos_strict = bool('strict' in server_config)
     app.state.vyos_origins = server_config.get('cors', {}).get('allow_origin', [])
     if 'graphql' in server_config:
         app.state.vyos_graphql = True
@@ -815,7 +890,7 @@ def initialization(session: ConfigSession, app: FastAPI = app):
                 app.state.vyos_introspection = True
             else:
                 app.state.vyos_introspection = False
-            # default value is merged in conf_mode http-api.py, if not set
+            # default values if not set explicitly
             app.state.vyos_auth_type = server_config['graphql']['authentication']['type']
             app.state.vyos_token_exp = server_config['graphql']['authentication']['expiration']
             app.state.vyos_secret_len = server_config['graphql']['authentication']['secret_length']
@@ -825,15 +900,7 @@ def initialization(session: ConfigSession, app: FastAPI = app):
     if app.state.vyos_graphql:
         graphql_init(app)
 
-    if not server_config['socket']:
-        config = ApiServerConfig(app,
-                                 host=server_config["listen_address"],
-                                 port=int(server_config["port"]),
-                                 proxy_headers=True)
-    else:
-        config = ApiServerConfig(app,
-                                 uds="/run/api.sock",
-                                 proxy_headers=True)
+    config = ApiServerConfig(app, uds="/run/api.sock", proxy_headers=True)
     server = ApiServer(config)
 
 def run_server():

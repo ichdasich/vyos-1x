@@ -30,11 +30,15 @@ SHOW_CONFIG = ['/bin/cli-shell-api', 'showConfig']
 LOAD_CONFIG = ['/bin/cli-shell-api', 'loadFile']
 MIGRATE_LOAD_CONFIG = ['/usr/libexec/vyos/vyos-load-config.py']
 SAVE_CONFIG = ['/usr/libexec/vyos/vyos-save-config.py']
-INSTALL_IMAGE = ['/opt/vyatta/sbin/install-image', '--url']
-REMOVE_IMAGE = ['/opt/vyatta/bin/vyatta-boot-image.pl', '--del']
+INSTALL_IMAGE = ['/usr/libexec/vyos/op_mode/image_installer.py',
+                 '--action', 'add', '--no-prompt', '--image-path']
+REMOVE_IMAGE = ['/usr/libexec/vyos/op_mode/image_manager.py',
+                '--action', 'delete', '--no-prompt', '--image-name']
 GENERATE = ['/opt/vyatta/bin/vyatta-op-cmd-wrapper', 'generate']
 SHOW = ['/opt/vyatta/bin/vyatta-op-cmd-wrapper', 'show']
 RESET = ['/opt/vyatta/bin/vyatta-op-cmd-wrapper', 'reset']
+REBOOT = ['/opt/vyatta/bin/vyatta-op-cmd-wrapper', 'reboot']
+POWEROFF = ['/opt/vyatta/bin/vyatta-op-cmd-wrapper', 'poweroff']
 OP_CMD_ADD = ['/opt/vyatta/bin/vyatta-op-cmd-wrapper', 'add']
 OP_CMD_DELETE = ['/opt/vyatta/bin/vyatta-op-cmd-wrapper', 'delete']
 
@@ -220,8 +224,16 @@ class ConfigSession(object):
         out = self.__run_command(SHOW + path)
         return out
 
+    def reboot(self, path):
+        out = self.__run_command(REBOOT + path)
+        return out
+
     def reset(self, path):
         out = self.__run_command(RESET + path)
+        return out
+
+    def poweroff(self, path):
+        out = self.__run_command(POWEROFF + path)
         return out
 
     def add_container_image(self, name):

@@ -61,14 +61,17 @@ def get_vrf_members(vrf: str) -> list:
     """
     import json
     from vyos.utils.process import cmd
-    if not interface_exists(vrf):
-        raise ValueError(f'VRF "{vrf}" does not exist!')
-    output = cmd(f'ip --json --brief link show master {vrf}')
-    answer = json.loads(output)
     interfaces = []
-    for data in answer:
-        if 'ifname' in data:
-            interfaces.append(data.get('ifname'))
+    try:
+        if not interface_exists(vrf):
+            raise ValueError(f'VRF "{vrf}" does not exist!')
+        output = cmd(f'ip --json --brief link show vrf {vrf}')
+        answer = json.loads(output)
+        for data in answer:
+            if 'ifname' in data:
+                interfaces.append(data.get('ifname'))
+    except:
+        pass
     return interfaces
 
 def get_interface_vrf(interface):
@@ -196,6 +199,21 @@ def get_all_vrfs():
         name = entry.pop('name')
         data[name] = entry
     return data
+
+def interface_list() -> list:
+    """
+    Get list of interfaces in system
+    :rtype: list
+    """
+    return Section.interfaces()
+
+
+def vrf_list() -> list:
+    """
+    Get list of VRFs in system
+    :rtype: list
+    """
+    return list(get_all_vrfs().keys())
 
 def mac2eui64(mac, prefix=None):
     """
@@ -468,3 +486,36 @@ def get_vxlan_vlan_tunnels(interface: str) -> list:
             os_configured_vlan_ids.append(str(vlanStart))
 
     return os_configured_vlan_ids
+
+def get_vxlan_vni_filter(interface: str) -> list:
+    """ Return a list of strings with VNIs configured in the Kernel"""
+    from json import loads
+    from vyos.utils.process import cmd
+
+    if not interface.startswith('vxlan'):
+        raise ValueError('Only applicable for VXLAN interfaces!')
+
+    # Determine current OS Kernel configured VNI filters in VXLAN interface
+    #
+    # $ bridge -j vni show dev vxlan1
+    # [{"ifname":"vxlan1","vnis":[{"vni":100},{"vni":200},{"vni":300,"vniEnd":399}]}]
+    #
+    # Example output: ['10010', '10020', '10021', '10022']
+    os_configured_vnis = []
+    tmp = loads(cmd(f'bridge --json vni show dev {interface}'))
+    if tmp:
+        for tunnel in tmp[0].get('vnis', {}):
+            vniStart = tunnel['vni']
+            if 'vniEnd' in tunnel:
+                vniEnd = tunnel['vniEnd']
+                # Build a real list for user VNIs
+                vni_list = list(range(vniStart, vniEnd +1))
+                # Convert list of integers to list or strings
+                os_configured_vnis.extend(map(str, vni_list))
+                # Proceed with next tunnel - this one is complete
+                continue
+
+            # Add single tunel id - not part of a range
+            os_configured_vnis.append(str(vniStart))
+
+    return os_configured_vnis

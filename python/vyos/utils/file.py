@@ -162,6 +162,13 @@ def chmod_775(path):
               S_IROTH | S_IXOTH
     chmod(path, bitmask)
 
+def chmod_400(path):
+    """ make file only readable by owner """
+    from stat import S_IRUSR
+
+    bitmask = S_IRUSR
+    chmod(path, bitmask)
+
 def file_permissions(path):
     """ Return file permissions in string format, e.g '0755' """
     return oct(os.stat(path).st_mode)[4:]

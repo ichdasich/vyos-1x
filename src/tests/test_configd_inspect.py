@@ -32,7 +32,10 @@ def import_script(s):
     path = os.path.join(CONF_DIR, s)
     name = os.path.splitext(s)[0].replace('-', '_')
     spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
+    try:
+        module = importlib.util.module_from_spec(spec)
+    except Exception as e:
+        raise Exception(str(path)+" "+str(name))
     spec.loader.exec_module(module)
     return module
 

@@ -1,5 +1,4 @@
 <!-- include start from bgp/neighbor-afi-ipv4-ipv6-common.xml.i -->
-
 <leafNode name="addpath-tx-all">
   <properties>
     <help>Use addpath to advertise all paths to a neighbor</help>
@@ -28,7 +27,7 @@
           <description>Route map name</description>
         </valueHelp>
         <constraint>
-          <regex>[-_a-zA-Z0-9.]+</regex>
+          #include <include/constraint/alpha-numeric-hyphen-underscore-dot.xml.i>
         </constraint>
         <constraintErrorMessage>Name of route-map can only contain alpha-numeric letters, hyphen and underscores</constraintErrorMessage>
       </properties>
@@ -44,7 +43,7 @@
           <description>Route map name</description>
         </valueHelp>
         <constraint>
-          <regex>[-_a-zA-Z0-9.]+</regex>
+          #include <include/constraint/alpha-numeric-hyphen-underscore-dot.xml.i>
         </constraint>
         <constraintErrorMessage>Name of route-map can only contain alpha-numeric letters, hyphen and underscores</constraintErrorMessage>
       </properties>
@@ -60,7 +59,7 @@
           <description>Route map name</description>
         </valueHelp>
         <constraint>
-          <regex>[-_a-zA-Z0-9.]+</regex>
+          #include <include/constraint/alpha-numeric-hyphen-underscore-dot.xml.i>
         </constraint>
         <constraintErrorMessage>Name of route-map can only contain alpha-numeric letters, hyphen and underscores</constraintErrorMessage>
       </properties>
@@ -185,7 +184,7 @@
       <description>Route map name</description>
     </valueHelp>
     <constraint>
-      <regex>[-_a-zA-Z0-9.]+</regex>
+      #include <include/constraint/alpha-numeric-hyphen-underscore-dot.xml.i>
     </constraint>
     <constraintErrorMessage>Name of route-map can only contain alpha-numeric letters, hyphen and underscores</constraintErrorMessage>
   </properties>

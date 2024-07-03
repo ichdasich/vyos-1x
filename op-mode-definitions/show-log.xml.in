@@ -38,6 +38,12 @@
             </properties>
             <command>journalctl --no-hostname --boot --quiet SYSLOG_FACILITY=10 SYSLOG_FACILITY=4</command>
           </leafNode>
+          <leafNode name="certbot">
+            <properties>
+              <help>Show log for certbot</help>
+            </properties>
+            <command>if sudo test -f /var/log/letsencrypt/letsencrypt.log; then sudo cat /var/log/letsencrypt/letsencrypt.log; else echo "Cerbot log does not exist"; fi</command>
+          </leafNode>
           <leafNode name="cluster">
             <properties>
               <help>Show log for Cluster</help>
@@ -78,7 +84,7 @@
                 <properties>
                   <help>Show log for DHCP server</help>
                 </properties>
-                <command>journalctl --no-hostname --boot --unit isc-dhcp-server.service</command>
+                <command>journalctl --no-hostname --boot --unit kea-dhcp4-server.service</command>
               </node>
               <node name="client">
                 <properties>
@@ -108,7 +114,7 @@
                 <properties>
                   <help>Show log for DHCPv6 server</help>
                 </properties>
-                <command>journalctl --no-hostname --boot --unit isc-dhcp-server6.service</command>
+                <command>journalctl --no-hostname --boot --unit kea-dhcp6-server.service</command>
               </node>
               <node name="client">
                 <properties>
@@ -213,7 +219,7 @@
                                 <path>firewall ipv4 forward filter rule</path>
                               </completionHelp>
                             </properties>
-                            <command>journalctl --no-hostname --boot -k | egrep "\[ipv4-FWD-filter-$8-[ADRJC]\]"</command>
+                            <command>journalctl --no-hostname --boot -k | egrep "\[ipv4-FWD-filter-$8-[ADRJCO]\]"</command>
                           </tagNode>
                         </children>
                       </node>
@@ -316,7 +322,7 @@
                                 <path>firewall ipv6 forward filter rule</path>
                               </completionHelp>
                             </properties>
-                            <command>journalctl --no-hostname --boot -k | egrep "\[ipv6-FWD-filter-$8-[ADRJC]\]"</command>
+                            <command>journalctl --no-hostname --boot -k | egrep "\[ipv6-FWD-filter-$8-[ADRJCO]\]"</command>
                           </tagNode>
                         </children>
                       </node>
@@ -458,11 +464,61 @@
             </properties>
             <command>journalctl --no-hostname --boot --unit lldpd.service</command>
           </leafNode>
-          <leafNode name="nat">
+          <node name="nat">
             <properties>
               <help>Show log for Network Address Translation (NAT)</help>
             </properties>
-            <command>egrep -i "kernel:.*\[NAT-[A-Z]{3,}-[0-9]+(-MASQ)?\]" $(find /var/log -maxdepth 1 -type f -name messages\* | sort -t. -k2nr)</command>
+            <children>
+              <node name="destination">
+                <properties>
+                  <help>Show NAT destination log</help>
+                </properties>
+                <command>journalctl --no-hostname --boot -k | egrep "\[DST-NAT-[0-9]+\]"</command>
+                <children>
+                  <tagNode name="rule">
+                    <properties>
+                      <help>Show NAT destination log for specified rule</help>
+                    </properties>
+                    <command>journalctl --no-hostname --boot -k | egrep "\[DST-NAT-$6\]"</command>
+                  </tagNode>
+                </children>
+              </node>
+              <node name="source">
+                <properties>
+                  <help>Show NAT source log</help>
+                </properties>
+                <command>journalctl --no-hostname --boot -k | egrep "\[SRC-NAT-[0-9]+(-MASQ)?\]"&quot;"</command>
+                <children>
+                  <tagNode name="rule">
+                    <properties>
+                      <help>Show NAT source log for specified rule</help>
+                    </properties>
+                    <command>journalctl --no-hostname --boot -k | egrep "\[SRC-NAT-$6(-MASQ)?\]"</command>
+                  </tagNode>
+                </children>
+              </node>
+              <node name="static">
+                <properties>
+                  <help>Show NAT static log</help>
+                </properties>
+                <command>journalctl --no-hostname --boot -k | egrep "\[STATIC-(SRC|DST)-NAT-[0-9]+\]"</command>
+                <children>
+                  <tagNode name="rule">
+                    <properties>
+                      <help>Show NAT static log for specified rule</help>
+                    </properties>
+                    <command>journalctl --no-hostname --boot -k | egrep "\[STATIC-(SRC|DST)-NAT-$6\]"</command>
+                  </tagNode>
+                </children>
+              </node>
+            </children>
+            <command>journalctl --no-hostname --boot -k | egrep "\[(STATIC-)?(DST|SRC)-NAT-[0-9]+(-MASQ)?\]"</command>
+          </node>
+          <leafNode name="ndp-proxy">
+            <properties>
+              <help>Show log for Neighbor Discovery Protocol (NDP) Proxy</help>
+            </properties>
+            <command>journalctl --no-hostname --boot --unit ndppd.service</command>
           </leafNode>
           <leafNode name="nhrp">
             <properties>
@@ -706,6 +762,47 @@
             </properties>
             <command>journalctl --no-hostname --boot --unit keepalived.service</command>
           </leafNode>
+          <node name="wireless">
+            <properties>
+              <help>Show log for Wireless interface</help>
+            </properties>
+            <children>
+              <node name="wpa-supplicant">
+                <properties>
+                  <help>Show log for WPA supplicant</help>
+                </properties>
+                <command>if cli-shell-api existsActive interfaces wireless; then journalctl --no-hostname --boot --unit "wpa_supplicant@*.service"; else echo "No wireless interface configured!"; fi</command>
+                <children>
+                  <tagNode name="interface">
+                    <properties>
+                      <help>Show log for specific wireless interface supplicant</help>
+                      <completionHelp>
+                        <path>interfaces wireless</path>
+                      </completionHelp>
+                    </properties>
+                    <command>if [[ $(cli-shell-api returnActiveValue interfaces wireless $6 type) == "station" ]]; then journalctl --no-hostname --boot --unit "wpa_supplicant@$6.service"; else echo "Wireless interface $6 not configured as station!"; fi</command>
+                  </tagNode>
+                </children>
+              </node>
+              <node name="hostapd">
+                <properties>
+                  <help>Show log for host access point daemon</help>
+                </properties>
+                <command>if cli-shell-api existsActive interfaces wireless; then journalctl --no-hostname --boot --unit "hostapd@*.service"; else echo "No wireless interface configured!"; fi</command>
+                <children>
+                  <tagNode name="interface">
+                    <properties>
+                      <help>Show log for specific host access point daemon interface</help>
+                      <completionHelp>
+                        <path>interfaces wireless</path>
+                      </completionHelp>
+                    </properties>
+                    <command>if [[ $(cli-shell-api returnActiveValue interfaces wireless $6 type) == "access-point" ]]; then journalctl --no-hostname --boot --unit "hostapd@$6.service"; else echo "Wireless interface $6 not configured as access-point!"; fi</command>
+                  </tagNode>
+                </children>
+              </node>
+            </children>
+          </node>
           <leafNode name="webproxy">
             <properties>
               <help>Show log for Webproxy</help>

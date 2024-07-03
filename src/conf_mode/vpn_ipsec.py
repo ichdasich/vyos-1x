@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2021-2023 VyOS maintainers and contributors
+# Copyright (C) 2021-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -21,18 +21,17 @@ import jmespath
 
 from sys import exit
 from time import sleep
-from time import time
 
 from vyos.base import Warning
 from vyos.config import Config
+from vyos.configdep import set_dependents
+from vyos.configdep import call_dependents
 from vyos.configdict import leaf_node_changed
 from vyos.configverify import verify_interface_exists
+from vyos.configverify import dynamic_interface_pattern
 from vyos.defaults import directories
 from vyos.ifconfig import Interface
-from vyos.pki import encode_certificate
 from vyos.pki import encode_public_key
-from vyos.pki import find_chain
-from vyos.pki import load_certificate
 from vyos.pki import load_private_key
 from vyos.pki import wrap_certificate
 from vyos.pki import wrap_crl
@@ -43,10 +42,10 @@ from vyos.template import is_ipv4
 from vyos.template import is_ipv6
 from vyos.template import render
 from vyos.utils.network import is_ipv6_link_local
+from vyos.utils.network import interface_exists
 from vyos.utils.dict import dict_search
 from vyos.utils.dict import dict_search_args
 from vyos.utils.process import call
-from vyos.utils.process import run
 from vyos import ConfigError
 from vyos import airbag
 airbag.enable()
@@ -65,13 +64,13 @@ default_install_routes = 'yes'
 
 vici_socket = '/var/run/charon.vici'
 
-CERT_PATH = f'{swanctl_dir}/x509/'
+CERT_PATH   = f'{swanctl_dir}/x509/'
 PUBKEY_PATH = f'{swanctl_dir}/pubkey/'
-KEY_PATH  = f'{swanctl_dir}/private/'
-CA_PATH   = f'{swanctl_dir}/x509ca/'
-CRL_PATH  = f'{swanctl_dir}/x509crl/'
+KEY_PATH    = f'{swanctl_dir}/private/'
+CA_PATH     = f'{swanctl_dir}/x509ca/'
+CRL_PATH    = f'{swanctl_dir}/x509crl/'
 
-DHCP_HOOK_IFLIST = '/tmp/ipsec_dhcp_waiting'
+DHCP_HOOK_IFLIST = '/tmp/ipsec_dhcp_interfaces'
 
 def get_config(config=None):
     if config:
@@ -87,15 +86,17 @@ def get_config(config=None):
     ipsec = conf.get_config_dict(base, key_mangling=('-', '_'),
                                  no_tag_node_value_mangle=True,
                                  get_first_key=True,
-                                 with_recursive_defaults=True)
+                                 with_recursive_defaults=True,
+                                 with_pki=True)
 
+    ipsec['dhcp_interfaces'] = set()
     ipsec['dhcp_no_address'] = {}
     ipsec['install_routes'] = 'no' if conf.exists(base + ["options", "disable-route-autoinstall"]) else default_install_routes
     ipsec['interface_change'] = leaf_node_changed(conf, base + ['interface'])
     ipsec['nhrp_exists'] = conf.exists(['protocols', 'nhrp', 'tunnel'])
-    ipsec['pki'] = conf.get_config_dict(['pki'], key_mangling=('-', '_'),
-                                        no_tag_node_value_mangle=True,
-                                        get_first_key=True)
+
+    if ipsec['nhrp_exists']:
+        set_dependents('nhrp', conf)
 
     tmp = conf.get_config_dict(l2tp_base, key_mangling=('-', '_'),
                                no_tag_node_value_mangle=True,
@@ -121,11 +122,11 @@ def verify_pki_x509(pki, x509_conf):
     if not pki or 'ca' not in pki or 'certificate' not in pki:
         raise ConfigError(f'PKI is not configured')
 
-    ca_cert_name = x509_conf['ca_certificate']
     cert_name = x509_conf['certificate']
 
-    if not dict_search_args(pki, 'ca', ca_cert_name, 'certificate'):
-        raise ConfigError(f'Missing CA certificate on specified PKI CA certificate "{ca_cert_name}"')
+    for ca_cert_name in x509_conf['ca_certificate']:
+        if not dict_search_args(pki, 'ca', ca_cert_name, 'certificate'):
+            raise ConfigError(f'Missing CA certificate on specified PKI CA certificate "{ca_cert_name}"')
 
     if not dict_search_args(pki, 'certificate', cert_name, 'certificate'):
         raise ConfigError(f'Missing certificate on specified PKI certificate "{cert_name}"')
@@ -160,9 +161,14 @@ def verify(ipsec):
                 if 'id' not in psk_config or 'secret' not in psk_config:
                     raise ConfigError(f'Authentication psk "{psk}" missing "id" or "secret"')
 
-    if 'interfaces' in ipsec :
-        for ifname in ipsec['interface']:
-            verify_interface_exists(ifname)
+    if 'interface' in ipsec:
+        tmp = re.compile(dynamic_interface_pattern)
+        for interface in ipsec['interface']:
+            # exclude check interface for dynamic interfaces
+            if tmp.match(interface):
+                verify_interface_exists(interface, warning_only=True)
+            else:
+                verify_interface_exists(interface)
 
     if 'l2tp' in ipsec:
         if 'esp_group' in ipsec['l2tp']:
@@ -217,6 +223,32 @@ def verify(ipsec):
     if 'remote_access' in ipsec:
         if 'connection' in ipsec['remote_access']:
             for name, ra_conf in ipsec['remote_access']['connection'].items():
+                if 'local_address' not in ra_conf and 'dhcp_interface' not in ra_conf:
+                    raise ConfigError(f"Missing local-address or dhcp-interface on remote-access connection {name}")
+
+                if 'dhcp_interface' in ra_conf:
+                    dhcp_interface = ra_conf['dhcp_interface']
+
+                    verify_interface_exists(dhcp_interface)
+                    dhcp_base = directories['isc_dhclient_dir']
+
+                    if not os.path.exists(f'{dhcp_base}/dhclient_{dhcp_interface}.conf'):
+                        raise ConfigError(f"Invalid dhcp-interface on remote-access connection {name}")
+
+                    ipsec['dhcp_interfaces'].add(dhcp_interface)
+
+                    address = get_dhcp_address(dhcp_interface)
+                    count = 0
+                    while not address and count < dhcp_wait_attempts:
+                        address = get_dhcp_address(dhcp_interface)
+                        count += 1
+                        sleep(dhcp_wait_sleep)
+
+                    if not address:
+                        ipsec['dhcp_no_address'][f'ra_{name}'] = dhcp_interface
+                        print(f"Failed to get address from dhcp-interface on remote-access connection {name} -- skipped")
+                        continue
+
                 if 'esp_group' in ra_conf:
                     if 'esp_group' not in ipsec or ra_conf['esp_group'] not in ipsec['esp_group']:
                         raise ConfigError(f"Invalid esp-group on {name} remote-access config")
@@ -374,6 +406,8 @@ def verify(ipsec):
                 if not os.path.exists(f'{dhcp_base}/dhclient_{dhcp_interface}.conf'):
                     raise ConfigError(f"Invalid dhcp-interface on site-to-site peer {peer}")
 
+                ipsec['dhcp_interfaces'].add(dhcp_interface)
+
                 address = get_dhcp_address(dhcp_interface)
                 count = 0
                 while not address and count < dhcp_wait_attempts:
@@ -382,7 +416,7 @@ def verify(ipsec):
                     sleep(dhcp_wait_sleep)
 
                 if not address:
-                    ipsec['dhcp_no_address'][peer] = dhcp_interface
+                    ipsec['dhcp_no_address'][f'peer_{peer}'] = dhcp_interface
                     print(f"Failed to get address from dhcp-interface on site-to-site peer {peer} -- skipped")
                     continue
 
@@ -396,7 +430,7 @@ def verify(ipsec):
 
                 if 'bind' in peer_conf['vti']:
                     vti_interface = peer_conf['vti']['bind']
-                    if not os.path.exists(f'/sys/class/net/{vti_interface}'):
+                    if not interface_exists(vti_interface):
                         raise ConfigError(f'VTI interface {vti_interface} for site-to-site peer {peer} does not exist!')
 
             if 'vti' not in peer_conf and 'tunnel' not in peer_conf:
@@ -431,31 +465,23 @@ def cleanup_pki_files():
                 os.unlink(file_path)
 
 def generate_pki_files_x509(pki, x509_conf):
-    ca_cert_name = x509_conf['ca_certificate']
-    ca_cert_data = dict_search_args(pki, 'ca', ca_cert_name, 'certificate')
-    ca_cert_crls = dict_search_args(pki, 'ca', ca_cert_name, 'crl') or []
-    ca_index = 1
-    crl_index = 1
+    for ca_cert_name in x509_conf['ca_certificate']:
+        ca_cert_data = dict_search_args(pki, 'ca', ca_cert_name, 'certificate')
+        ca_cert_crls = dict_search_args(pki, 'ca', ca_cert_name, 'crl') or []
+        crl_index = 1
 
-    ca_cert = load_certificate(ca_cert_data)
-    pki_ca_certs = [load_certificate(ca['certificate']) for ca in pki['ca'].values()]
+        with open(os.path.join(CA_PATH, f'{ca_cert_name}.pem'), 'w') as f:
+            f.write(wrap_certificate(ca_cert_data))
 
-    ca_cert_chain = find_chain(ca_cert, pki_ca_certs)
+        for crl in ca_cert_crls:
+            with open(os.path.join(CRL_PATH, f'{ca_cert_name}_{crl_index}.pem'), 'w') as f:
+                f.write(wrap_crl(crl))
+            crl_index += 1
 
     cert_name = x509_conf['certificate']
     cert_data = dict_search_args(pki, 'certificate', cert_name, 'certificate')
     key_data = dict_search_args(pki, 'certificate', cert_name, 'private', 'key')
     protected = 'passphrase' in x509_conf
-
-    for ca_cert_obj in ca_cert_chain:
-        with open(os.path.join(CA_PATH, f'{ca_cert_name}_{ca_index}.pem'), 'w') as f:
-            f.write(encode_certificate(ca_cert_obj))
-        ca_index += 1
-
-    for crl in ca_cert_crls:
-        with open(os.path.join(CRL_PATH, f'{ca_cert_name}_{crl_index}.pem'), 'w') as f:
-            f.write(wrap_crl(crl))
-        crl_index += 1
 
     with open(os.path.join(CERT_PATH, f'{cert_name}.pem'), 'w') as f:
         f.write(wrap_certificate(cert_data))
@@ -491,9 +517,9 @@ def generate(ipsec):
         render(charon_conf, 'ipsec/charon.j2', {'install_routes': default_install_routes})
         return
 
-    if ipsec['dhcp_no_address']:
+    if ipsec['dhcp_interfaces']:
         with open(DHCP_HOOK_IFLIST, 'w') as f:
-            f.write(" ".join(ipsec['dhcp_no_address'].values()))
+            f.write(" ".join(ipsec['dhcp_interfaces']))
     elif os.path.exists(DHCP_HOOK_IFLIST):
         os.unlink(DHCP_HOOK_IFLIST)
 
@@ -510,13 +536,23 @@ def generate(ipsec):
 
     if 'remote_access' in ipsec and 'connection' in ipsec['remote_access']:
         for rw, rw_conf in ipsec['remote_access']['connection'].items():
+            if f'ra_{rw}' in ipsec['dhcp_no_address']:
+                continue
+
+            local_ip = ''
+            if 'local_address' in rw_conf:
+                local_ip = rw_conf['local_address']
+            elif 'dhcp_interface' in rw_conf:
+                local_ip = get_dhcp_address(rw_conf['dhcp_interface'])
+
+            ipsec['remote_access']['connection'][rw]['local_address'] = local_ip
 
             if 'authentication' in rw_conf and 'x509' in rw_conf['authentication']:
                 generate_pki_files_x509(ipsec['pki'], rw_conf['authentication']['x509'])
 
     if 'site_to_site' in ipsec and 'peer' in ipsec['site_to_site']:
         for peer, peer_conf in ipsec['site_to_site']['peer'].items():
-            if peer in ipsec['dhcp_no_address']:
+            if f'peer_{peer}' in ipsec['dhcp_no_address']:
                 continue
 
             if peer_conf['authentication']['mode'] == 'x509':
@@ -568,13 +604,6 @@ def generate(ipsec):
     render(interface_conf, 'ipsec/interfaces_use.conf.j2', ipsec)
     render(swanctl_conf, 'ipsec/swanctl.conf.j2', ipsec)
 
-def resync_nhrp(ipsec):
-    if ipsec and not ipsec['nhrp_exists']:
-        return
-
-    tmp = run('/usr/libexec/vyos/conf_mode/protocols_nhrp.py')
-    if tmp > 0:
-        print('ERROR: failed to reapply NHRP settings!')
 
 def apply(ipsec):
     systemd_service = 'strongswan.service'
@@ -583,7 +612,14 @@ def apply(ipsec):
     else:
         call(f'systemctl reload-or-restart {systemd_service}')
 
-    resync_nhrp(ipsec)
+        if ipsec.get('nhrp_exists', False):
+            try:
+                call_dependents()
+            except ConfigError:
+                # Ignore config errors on dependent due to being called too early. Example:
+                # ConfigError("ConfigError('Interface ethN requires an IP address!')")
+                pass
+
 
 if __name__ == '__main__':
     try:

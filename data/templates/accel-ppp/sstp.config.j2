@@ -10,6 +10,12 @@ ippool
 {% include 'accel-ppp/config_modules_ipv6.j2' %}
 {# Common authentication protocols (pap, chap ...) #}
 {% include 'accel-ppp/config_modules_auth_protocols.j2' %}
+{% if snmp is vyos_defined %}
+net-snmp
+{% endif %}
+{% if limits is vyos_defined %}
+connlimit
+{% endif %}
 
 [core]
 thread-count={{ thread_count }}
@@ -23,10 +29,12 @@ max-starting={{ max_concurrent_sessions }}
 [log]
 syslog=accel-sstp,daemon
 copy=1
-level=5
+{% if log.level is vyos_defined %}
+level={{ log.level }}
+{% endif %}
 
 [client-ip-range]
-disable
+0.0.0.0/0
 
 [sstp]
 verbose=1
@@ -36,6 +44,16 @@ accept=ssl
 ssl-ca-file=/run/accel-pppd/sstp-ca.pem
 ssl-pemfile=/run/accel-pppd/sstp-cert.pem
 ssl-keyfile=/run/accel-pppd/sstp-cert.key
+{% if host_name is vyos_defined %}
+host-name={{ host_name }}
+{% endif %}
+{% if default_pool is vyos_defined %}
+ip-pool={{ default_pool }}
+{% endif %}
+{% if default_ipv6_pool is vyos_defined %}
+ipv6-pool={{ default_ipv6_pool }}
+ipv6-pool-delegate={{ default_ipv6_pool }}
+{% endif %}
 
 {# Common IP pool definitions #}
 {% include 'accel-ppp/config_ip_pool.j2' %}
@@ -46,24 +64,26 @@ ssl-keyfile=/run/accel-pppd/sstp-cert.key
 {# Common DNS name-server definition #}
 {% include 'accel-ppp/config_name_server.j2' %}
 
+{# Common wins-server definition #}
+{% include 'accel-ppp/config_wins_server.j2' %}
+
 {# Common chap-secrets and RADIUS server/option definitions #}
 {% include 'accel-ppp/config_chap_secrets_radius.j2' %}
 
-[ppp]
-verbose=1
-check-ip=1
-{# MTU #}
-mtu={{ mtu }}
-ipv6={{ 'allow' if ppp_options.ipv6 is vyos_defined("deny") and client_ipv6_pool is vyos_defined else ppp_options.ipv6 }}
-ipv4={{ ppp_options.ipv4 }}
-
-mppe={{ ppp_options.mppe }}
-lcp-echo-interval={{ ppp_options.lcp_echo_interval }}
-lcp-echo-timeout={{ ppp_options.lcp_echo_timeout }}
-lcp-echo-failure={{ ppp_options.lcp_echo_failure }}
+{# Common ppp-options definitions #}
+{% include 'accel-ppp/ppp-options.j2' %}
 
 {# Common RADIUS shaper configuration #}
 {% include 'accel-ppp/config_shaper_radius.j2' %}
+
+{# Common Extended scripts configuration #}
+{% include 'accel-ppp/config_extended_scripts.j2' %}
+
+{# Common Limits configuration #}
+{% include 'accel-ppp/config_limits.j2' %}
+
+{# Common SNMP definitions #}
+{% include 'accel-ppp/config_snmp.j2' %}
 
 [cli]
 tcp=127.0.0.1:2005

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2020-2022 VyOS maintainers and contributors
+# Copyright (C) 2020-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -14,15 +14,11 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import jmespath
-import json
 import os
 import unittest
 
 from base_vyostest_shim import VyOSUnitTestSHIM
 from vyos.configsession import ConfigSessionError
-from vyos.utils.process import cmd
-from vyos.utils.dict import dict_search
 
 base_path = ['nat']
 src_path = base_path + ['source']
@@ -46,17 +42,6 @@ class TestNAT(VyOSUnitTestSHIM.TestCase):
         self.cli_commit()
         self.assertFalse(os.path.exists(nftables_nat_config))
         self.assertFalse(os.path.exists(nftables_static_nat_conf))
-
-    def verify_nftables(self, nftables_search, table, inverse=False, args=''):
-        nftables_output = cmd(f'sudo nft {args} list table {table}')
-
-        for search in nftables_search:
-            matched = False
-            for line in nftables_output.split("\n"):
-                if all(item in line for item in search):
-                    matched = True
-                    break
-            self.assertTrue(not matched if inverse else matched, msg=search)
 
     def wait_for_domain_resolver(self, table, set_name, element, max_wait=10):
         # Resolver no longer blocks commit, need to wait for daemon to populate set
@@ -100,21 +85,28 @@ class TestNAT(VyOSUnitTestSHIM.TestCase):
         address_group_member = '192.0.2.1'
         interface_group = 'smoketest_ifaces'
         interface_group_member = 'bond.99'
-        rule = '100'
 
         self.cli_set(['firewall', 'group', 'address-group', address_group, 'address', address_group_member])
         self.cli_set(['firewall', 'group', 'interface-group', interface_group, 'interface', interface_group_member])
 
-        self.cli_set(src_path + ['rule', rule, 'source', 'group', 'address-group', address_group])
-        self.cli_set(src_path + ['rule', rule, 'outbound-interface', 'group', interface_group])
-        self.cli_set(src_path + ['rule', rule, 'translation', 'address', 'masquerade'])
+        self.cli_set(src_path + ['rule', '100', 'source', 'group', 'address-group', address_group])
+        self.cli_set(src_path + ['rule', '100', 'outbound-interface', 'group', interface_group])
+        self.cli_set(src_path + ['rule', '100', 'translation', 'address', 'masquerade'])
+
+        self.cli_set(src_path + ['rule', '110', 'source', 'group', 'address-group', address_group])
+        self.cli_set(src_path + ['rule', '110', 'translation', 'address', '203.0.113.1'])
+
+        self.cli_set(src_path + ['rule', '120', 'source', 'group', 'address-group', address_group])
+        self.cli_set(src_path + ['rule', '120', 'translation', 'address', '203.0.113.111/32'])
 
         self.cli_commit()
 
         nftables_search = [
             [f'set A_{address_group}'],
             [f'elements = {{ {address_group_member} }}'],
-            [f'ip saddr @A_{address_group}', f'oifname @I_{interface_group}', 'masquerade']
+            [f'ip saddr @A_{address_group}', f'oifname @I_{interface_group}', 'masquerade'],
+            [f'ip saddr @A_{address_group}', 'snat to 203.0.113.1'],
+            [f'ip saddr @A_{address_group}', 'snat prefix to 203.0.113.111/32']
         ]
 
         self.verify_nftables(nftables_search, 'ip vyos_nat')
@@ -288,6 +280,26 @@ class TestNAT(VyOSUnitTestSHIM.TestCase):
         nftables_search = [
             [f'iifname "{ifname}"', f'tcp dport {dst_port}', f'dnat to jhash ip saddr . tcp sport . ip daddr . tcp dport mod 100 map', f'0-9 : {member_1}, 10-99 : {member_2}'],
             [f'oifname "{ifname}"', f'snat to numgen random mod 100 map', f'0-34 : {member_3}, 35-99 : {member_4}']
+        ]
+
+        self.verify_nftables(nftables_search, 'ip vyos_nat')
+
+    def test_snat_net_port_map(self):
+        self.cli_set(src_path + ['rule', '10', 'protocol', 'tcp_udp'])
+        self.cli_set(src_path + ['rule', '10', 'source', 'address', '100.64.0.0/25'])
+        self.cli_set(src_path + ['rule', '10', 'translation', 'address', '203.0.113.0/25'])
+        self.cli_set(src_path + ['rule', '10', 'translation', 'port', '1025-3072'])
+
+        self.cli_set(src_path + ['rule', '20', 'protocol', 'tcp_udp'])
+        self.cli_set(src_path + ['rule', '20', 'source', 'address', '100.64.0.128/25'])
+        self.cli_set(src_path + ['rule', '20', 'translation', 'address', '203.0.113.128/25'])
+        self.cli_set(src_path + ['rule', '20', 'translation', 'port', '1025-3072'])
+
+        self.cli_commit()
+
+        nftables_search = [
+            ['meta l4proto { tcp, udp }', 'snat ip prefix to ip saddr map { 100.64.0.0/25 : 203.0.113.0/25 . 1025-3072 }', 'comment "SRC-NAT-10"'],
+            ['meta l4proto { tcp, udp }', 'snat ip prefix to ip saddr map { 100.64.0.128/25 : 203.0.113.128/25 . 1025-3072 }', 'comment "SRC-NAT-20"']
         ]
 
         self.verify_nftables(nftables_search, 'ip vyos_nat')

@@ -16,6 +16,7 @@
 from json import loads as json_loads
 from os import sync
 from dataclasses import dataclass
+from time import sleep
 
 from psutil import disk_partitions
 
@@ -31,12 +32,17 @@ class DiskDetails:
 
 def disk_cleanup(drive_path: str) -> None:
     """Clean up disk partition table (MBR and GPT)
+    Remove partition and device signatures.
     Zeroize primary and secondary headers - first and last 17408 bytes
     (512 bytes * 34 LBA) on a drive
 
     Args:
         drive_path (str): path to a drive that needs to be cleaned
     """
+    partitions: list[str] = partition_list(drive_path)
+    for partition in partitions:
+        run(f'wipefs -af {partition}')
+    run(f'wipefs -af {drive_path}')
     run(f'sgdisk -Z {drive_path}')
 
 
@@ -73,7 +79,7 @@ def parttable_create(drive_path: str, root_size: int) -> None:
     run(command)
     # update partitons in kernel
     sync()
-    run(f'partprobe {drive_path}')
+    run(f'partx -u {drive_path}')
 
     partitions: list[str] = partition_list(drive_path)
 
@@ -150,7 +156,7 @@ def filesystem_create(partition: str, fstype: str) -> None:
 def partition_mount(partition: str,
                     path: str,
                     fsype: str = '',
-                    overlay_params: dict[str, str] = {}) -> None:
+                    overlay_params: dict[str, str] = {}) -> bool:
     """Mount a partition into a path
 
     Args:
@@ -159,6 +165,9 @@ def partition_mount(partition: str,
         fsype (str): optionally, set fstype ('squashfs', 'overlay', 'iso9660')
         overlay_params (dict): optionally, set overlay parameters.
         Defaults to None.
+
+    Returns:
+        bool: True on success
     """
     if fsype in ['squashfs', 'iso9660']:
         command: str = f'mount -o loop,ro -t {fsype} {partition} {path}'
@@ -171,7 +180,11 @@ def partition_mount(partition: str,
     else:
         command = f'mount {partition} {path}'
 
-    run(command)
+    rc = run(command)
+    if rc == 0:
+        return True
+
+    return False
 
 
 def partition_umount(partition: str = '', path: str = '') -> None:
@@ -195,11 +208,23 @@ def find_device(mountpoint: str) -> str:
     Returns:
         str: Path to device, Empty if not found
     """
-    mounted_partitions = disk_partitions()
+    mounted_partitions = disk_partitions(all=True)
     for partition in mounted_partitions:
         if partition.mountpoint == mountpoint:
             return partition.mountpoint
     return ''
+
+
+def wait_for_umount(mountpoint: str = '') -> None:
+    """Wait (within reason) for umount to complete
+    """
+    i = 0
+    while find_device(mountpoint):
+        i += 1
+        if i == 5:
+            print(f'Warning: {mountpoint} still mounted')
+            break
+        sleep(1)
 
 
 def disks_size() -> dict[str, int]:

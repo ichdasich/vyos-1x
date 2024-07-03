@@ -1,4 +1,4 @@
-# Copyright 2023 VyOS maintainers and contributors <maintainers@vyos.io>
+# Copyright 2023-2024 VyOS maintainers and contributors <maintainers@vyos.io>
 #
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
@@ -27,7 +27,7 @@ TMPL_GRUB_COMPAT: str = 'grub/grub_compat.j2'
 # define regexes and variables
 REGEX_VERSION = r'^menuentry "[^\n]*{\n[^}]*\s+linux /boot/(?P<version>\S+)/[^}]*}'
 REGEX_MENUENTRY = r'^menuentry "[^\n]*{\n[^}]*\s+linux /boot/(?P<version>\S+)/vmlinuz (?P<options>[^\n]+)\n[^}]*}'
-REGEX_CONSOLE = r'^.*console=(?P<console_type>[^\s\d]+)(?P<console_num>[\d]+).*$'
+REGEX_CONSOLE = r'^.*console=(?P<console_type>[^\s\d]+)(?P<console_num>[\d]+)(,(?P<console_speed>[\d]+))?.*$'
 REGEX_SANIT_CONSOLE = r'\ ?console=[^\s\d]+[\d]+(,\d+)?\ ?'
 REGEX_SANIT_INIT = r'\ ?init=\S*\ ?'
 REGEX_SANIT_QUIET = r'\ ?quiet\ ?'
@@ -131,6 +131,8 @@ def parse_entry(entry: tuple) -> dict:
     # find console type and number
     regex_filter = compile(REGEX_CONSOLE)
     entry_dict.update(regex_filter.match(entry[1]).groupdict())
+    speed = entry_dict.get('console_speed', None)
+    entry_dict['console_speed'] = speed if speed is not None else '115200'
     entry_dict['boot_opts'] = sanitize_boot_opts(entry[1])
 
     return entry_dict
@@ -168,9 +170,12 @@ def prune_vyos_versions(root_dir: str = '') -> None:
     if not root_dir:
         root_dir = disk.find_persistence()
 
-    for version in grub.version_list():
+    version_files = Path(f'{root_dir}/{grub.GRUB_DIR_VYOS_VERS}').glob('*.cfg')
+
+    for file in version_files:
+        version = Path(file).stem
         if not Path(f'{root_dir}/boot/{version}').is_dir():
-            grub.version_del(version)
+            grub.version_del(version, root_dir)
 
 
 def update_cfg_ver(root_dir:str = '') -> int:
@@ -193,11 +198,11 @@ def update_cfg_ver(root_dir:str = '') -> int:
     return cfg_version
 
 
-def get_default(menu_entries: list, root_dir: str = '') -> Union[int, None]:
+def get_default(data: dict, root_dir: str = '') -> Union[int, None]:
     """Translate default version to menuentry index
 
     Args:
-        menu_entries (list): list of dicts of installed version boot data
+        data (dict): boot data
         root_dir (str): an optional path to the root directory
 
     Returns:
@@ -208,10 +213,16 @@ def get_default(menu_entries: list, root_dir: str = '') -> Union[int, None]:
 
     grub_cfg_main = f'{root_dir}/{grub.GRUB_CFG_MAIN}'
 
+    menu_entries = data.get('versions', [])
+    console_type = data.get('console_type', 'tty')
+    console_num = data.get('console_num', '0')
     image_name = image.get_default_image()
 
-    sublist = list(filter(lambda x: x.get('version') == image_name,
-                        menu_entries))
+    sublist = list(filter(lambda x: (x.get('version') == image_name and
+                                     x.get('console_type') == console_type and
+                                     x.get('bootmode') == 'normal'),
+                          menu_entries))
+
     if sublist:
         return menu_entries.index(sublist[0])
 
@@ -236,6 +247,10 @@ def update_version_list(root_dir: str = '') -> list[dict]:
     menu_entries = parse_menuentries(grub_cfg_main)
     menu_versions = find_versions(menu_entries)
 
+    # remove deprecated console-type ttyUSB
+    menu_entries = list(filter(lambda x: x.get('console_type') != 'ttyUSB',
+                               menu_entries))
+
     # get list of versions added/removed by image-tools
     current_versions = grub.version_list(root_dir)
 
@@ -244,13 +259,17 @@ def update_version_list(root_dir: str = '') -> list[dict]:
         menu_entries = list(filter(lambda x: x.get('version') != ver,
                                    menu_entries))
 
+    # reset boot_opts in case of config update
+    for entry in menu_entries:
+        entry['boot_opts'] = grub.get_boot_opts(entry['version'])
+
     add = list(set(current_versions) - set(menu_versions))
     for ver in add:
         last = menu_entries[0].get('version')
         new = deepcopy(list(filter(lambda x: x.get('version') == last,
                                    menu_entries)))
         for e in new:
-            boot_opts = e.get('boot_opts').replace(last, ver)
+            boot_opts = grub.get_boot_opts(ver)
             e.update({'version': ver, 'boot_opts': boot_opts})
 
         menu_entries = new + menu_entries
@@ -271,16 +290,18 @@ def grub_cfg_fields(root_dir: str = '') -> dict:
         root_dir = disk.find_persistence()
 
     grub_cfg_main = f'{root_dir}/{grub.GRUB_CFG_MAIN}'
+    grub_vars = f'{root_dir}/{grub.CFG_VYOS_VARS}'
 
-    fields = {'default': 0, 'timeout': 5}
-    # 'default' and 'timeout' from legacy grub.cfg
+    fields = grub.vars_read(grub_vars)
+    # 'default' and 'timeout' from legacy grub.cfg resets 'default' to
+    # index, rather than uuid
     fields |= grub.vars_read(grub_cfg_main)
 
     fields['tools_version'] = SYSTEM_CFG_VER
     menu_entries = update_version_list(root_dir)
     fields['versions'] = menu_entries
 
-    default = get_default(menu_entries, root_dir)
+    default = get_default(fields, root_dir)
     if default is not None:
         fields['default'] = default
 

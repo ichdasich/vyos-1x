@@ -2,98 +2,133 @@
 <interfaceDefinition>
   <node name="pki" owner="${vyos_conf_scripts_dir}/pki.py">
     <properties>
-      <help>VyOS PKI configuration</help>
+      <help>Public key infrastructure (PKI)</help>
       <priority>300</priority>
     </properties>
     <children>
       <tagNode name="ca">
         <properties>
           <help>Certificate Authority</help>
+          <constraint>
+            #include <include/constraint/alpha-numeric-hyphen-underscore-dot.xml.i>
+          </constraint>
         </properties>
         <children>
-          <leafNode name="certificate">
-            <properties>
-              <help>CA certificate in PEM format</help>
-            </properties>
-          </leafNode>
+          #include <include/pki/cli-certificate-base64.xml.i>
           #include <include/generic-description.xml.i>
           <node name="private">
             <properties>
               <help>CA private key in PEM format</help>
             </properties>
             <children>
-              <leafNode name="key">
-                <properties>
-                  <help>CA private key in PEM format</help>
-                </properties>
-              </leafNode>
-              <leafNode name="password-protected">
-                <properties>
-                  <help>CA private key is password protected</help>
-                  <valueless/>
-                </properties>
-              </leafNode>
+              #include <include/pki/cli-private-key-base64.xml.i>
+              #include <include/pki/password-protected.xml.i>
             </children>
           </node>
           <leafNode name="crl">
             <properties>
               <help>Certificate revocation list in PEM format</help>
+              <constraint>
+                <validator name="base64"/>
+              </constraint>
+              <constraintErrorMessage>CRL is not base64-encoded</constraintErrorMessage>
               <multi/>
             </properties>
           </leafNode>
-          <leafNode name="revoke">
-            <properties>
-              <help>If parent CA is present, this CA certificate will be included in generated CRLs</help>
-              <valueless/>
-            </properties>
-          </leafNode>
+          #include <include/pki/cli-revoke.xml.i>
         </children>
       </tagNode>
       <tagNode name="certificate">
         <properties>
           <help>Certificate</help>
+          <constraint>
+            #include <include/constraint/alpha-numeric-hyphen-underscore-dot.xml.i>
+          </constraint>
         </properties>
         <children>
-          <leafNode name="certificate">
+          #include <include/pki/cli-certificate-base64.xml.i>
+          <node name="acme">
             <properties>
-              <help>Certificate in PEM format</help>
+              <help>Automatic Certificate Management Environment (ACME) request</help>
             </properties>
-          </leafNode>
+            <children>
+              #include <include/url-http-https.xml.i>
+              <leafNode name="url">
+                <defaultValue>https://acme-v02.api.letsencrypt.org/directory</defaultValue>
+              </leafNode>
+              <leafNode name="domain-name">
+                <properties>
+                  <help>Domain Name</help>
+                  <constraint>
+                    <validator name="fqdn"/>
+                  </constraint>
+                  <constraintErrorMessage>Invalid domain name (RFC 1123 section 2).\nMay only contain letters, numbers and .-_</constraintErrorMessage>
+                  <multi/>
+                </properties>
+              </leafNode>
+              <leafNode name="email">
+                <properties>
+                  <help>Email address to associate with certificate</help>
+                  <constraint>
+                    #include <include/constraint/email.xml.i>
+                  </constraint>
+                </properties>
+              </leafNode>
+              #include <include/listen-address-ipv4-single.xml.i>
+              <leafNode name="rsa-key-size">
+                <properties>
+                  <help>Size of the RSA key</help>
+                  <completionHelp>
+                    <list>2048 3072 4096</list>
+                  </completionHelp>
+                  <valueHelp>
+                    <format>2048</format>
+                    <description>RSA key length 2048 bit</description>
+                  </valueHelp>
+                  <valueHelp>
+                    <format>3072</format>
+                    <description>RSA key length 3072 bit</description>
+                  </valueHelp>
+                  <valueHelp>
+                    <format>4096</format>
+                    <description>RSA key length 4096 bit</description>
+                  </valueHelp>
+                  <constraint>
+                    <regex>(2048|3072|4096)</regex>
+                  </constraint>
+                </properties>
+                <defaultValue>2048</defaultValue>
+              </leafNode>
+            </children>
+          </node>
           #include <include/generic-description.xml.i>
           <node name="private">
             <properties>
               <help>Certificate private key</help>
             </properties>
             <children>
-              <leafNode name="key">
-                <properties>
-                  <help>Certificate private key in PEM format</help>
-                </properties>
-              </leafNode>
-              <leafNode name="password-protected">
-                <properties>
-                  <help>Certificate private key is password protected</help>
-                  <valueless/>
-                </properties>
-              </leafNode>
+              #include <include/pki/cli-private-key-base64.xml.i>
+              #include <include/pki/password-protected.xml.i>
             </children>
           </node>
-          <leafNode name="revoke">
-            <properties>
-              <help>If CA is present, this certificate will be included in generated CRLs</help>
-              <valueless/>
-            </properties>
-          </leafNode>
+          #include <include/pki/cli-revoke.xml.i>
         </children>
       </tagNode>
       <tagNode name="dh">
         <properties>
           <help>Diffie-Hellman parameters</help>
+          <constraint>
+            #include <include/constraint/alpha-numeric-hyphen-underscore-dot.xml.i>
+          </constraint>
         </properties>
         <children>
           <leafNode name="parameters">
             <properties>
               <help>DH parameters in PEM format</help>
+              <constraint>
+                <validator name="base64"/>
+              </constraint>
+              <constraintErrorMessage>DH parameters are not base64-encoded</constraintErrorMessage>
             </properties>
           </leafNode>
         </children>
@@ -108,9 +143,44 @@
               <help>Public key</help>
             </properties>
             <children>
-              <leafNode name="key">
+              #include <include/pki/cli-public-key-base64.xml.i>
+            </children>
+          </node>
+          <node name="private">
+            <properties>
+              <help>Private key</help>
+            </properties>
+            <children>
+              #include <include/pki/cli-private-key-base64.xml.i>
+              #include <include/pki/password-protected.xml.i>
+            </children>
+          </node>
+        </children>
+      </tagNode>
+      <tagNode name="openssh">
+        <properties>
+          <help>OpenSSH public and private keys</help>
+        </properties>
+        <children>
+          <node name="public">
+            <properties>
+              <help>Public key</help>
+            </properties>
+            <children>
+              #include <include/pki/cli-public-key-base64.xml.i>
+              <leafNode name="type">
                 <properties>
-                  <help>Public key in PEM format</help>
+                  <help>SSH public key type</help>
+                  <completionHelp>
+                    <list>ssh-rsa</list>
+                  </completionHelp>
+                  <valueHelp>
+                    <format>ssh-rsa</format>
+                    <description>Key pair based on RSA algorithm</description>
+                  </valueHelp>
+                  <constraint>
+                    <regex>(ssh-rsa)</regex>
+                  </constraint>
                 </properties>
               </leafNode>
             </children>
@@ -120,17 +190,32 @@
               <help>Private key</help>
             </properties>
             <children>
-              <leafNode name="key">
-                <properties>
-                  <help>Private key in PEM format</help>
-                </properties>
-              </leafNode>
-              <leafNode name="password-protected">
-                <properties>
-                  <help>Private key is password protected</help>
-                  <valueless/>
-                </properties>
-              </leafNode>
+              #include <include/pki/cli-private-key-base64.xml.i>
+              #include <include/pki/password-protected.xml.i>
+            </children>
+          </node>
+        </children>
+      </tagNode>
+      <tagNode name="openssh">
+        <properties>
+          <help>OpenSSH public and private keys</help>
+        </properties>
+        <children>
+          <node name="public">
+            <properties>
+              <help>Public key</help>
+            </properties>
+            <children>
+              #include <include/pki/cli-public-key-base64.xml.i>
+            </children>
+          </node>
+          <node name="private">
+            <properties>
+              <help>Private key</help>
+            </properties>
+            <children>
+              #include <include/pki/cli-private-key-base64.xml.i>
+              #include <include/pki/password-protected.xml.i>
             </children>
           </node>
         </children>

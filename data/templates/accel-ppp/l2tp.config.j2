@@ -2,23 +2,23 @@
 [modules]
 log_syslog
 l2tp
-chap-secrets
-{% for proto in auth_proto %}
-{{ proto }}
-{% endfor %}
-
-{% if auth_mode == 'radius' %}
-radius
+shaper
+{# Common authentication backend definitions #}
+{% include 'accel-ppp/config_modules_auth_mode.j2' %}
+ippool
+{# Common IPv6 definitions #}
+{% include 'accel-ppp/config_modules_ipv6.j2' %}
+{# Common authentication protocols (pap, chap ...) #}
+{% include 'accel-ppp/config_modules_auth_protocols.j2' %}
+{% if snmp is vyos_defined %}
+net-snmp
+{% endif %}
+{% if limits is vyos_defined %}
+connlimit
 {% endif %}
 
-ippool
-shaper
-ipv6pool
-ipv6_nd
-ipv6_dhcp
-
 [core]
-thread-count={{ thread_cnt }}
+thread-count={{ thread_count }}
 
 [common]
 {% if max_concurrent_sessions is vyos_defined %}
@@ -28,145 +28,65 @@ max-starting={{ max_concurrent_sessions }}
 [log]
 syslog=accel-l2tp,daemon
 copy=1
-level=5
-
-{% if dnsv4 %}
-[dns]
-{%     for dns in dnsv4 %}
-dns{{ loop.index }}={{ dns }}
-{%     endfor %}
-{% endif %}
-
-{% if dnsv6 %}
-[ipv6-dns]
-{%     for dns in dnsv6 %}
-{{ dns }}
-{%     endfor %}
-{% endif %}
-
-{% if wins %}
-[wins]
-{%     for server in wins %}
-wins{{ loop.index }}={{ server }}
-{%     endfor %}
-{% endif %}
-
-[l2tp]
-verbose=1
-ifname=l2tp%d
-ppp-max-mtu={{ mtu }}
-mppe={{ ppp_mppe }}
-{% if outside_addr %}
-bind={{ outside_addr }}
-{% endif %}
-{% if lns_shared_secret %}
-secret={{ lns_shared_secret }}
-{% endif %}
-{% if lns_host_name %}
-host-name={{ lns_host_name }}
+{% if log.level is vyos_defined %}
+level={{ log.level }}
 {% endif %}
 
 [client-ip-range]
 0.0.0.0/0
 
-{% if client_ip_pool or client_ip_subnets %}
-[ip-pool]
-{%     if client_ip_pool %}
-{{ client_ip_pool }}
-{%     endif %}
-{%     if client_ip_subnets %}
-{%         for sn in client_ip_subnets %}
-{{ sn }}
-{%         endfor %}
-{%     endif %}
-{% endif %}
-{% if gateway_address %}
-gw-ip-address={{ gateway_address }}
-{% endif %}
-
-{% if auth_mode == 'local' %}
-[chap-secrets]
-chap-secrets={{ chap_secrets_file }}
-{% elif auth_mode == 'radius' %}
-[radius]
+[l2tp]
 verbose=1
-{%     for r in radius_server %}
-server={{ r.server }},{{ r.key }},auth-port={{ r.port }},acct-port={{ r.acct_port }},req-limit=0,fail-time={{ r.fail_time }}
-{%     endfor %}
-{%     if radius_dynamic_author.server is vyos_defined %}
-dae-server={{ radius_dynamic_author.server }}:{{ radius_dynamic_author.port }},{{ radius_dynamic_author.key }}
-{%     endif %}
-{%     if radius_acct_interim_interval is vyos_defined %}
-acct-interim-interval={{ radius_acct_interim_interval }}
-{%     endif %}
-{%     if radius_acct_inter_jitter %}
-acct-interim-jitter={{ radius_acct_inter_jitter }}
-{%     endif %}
-acct-timeout={{ radius_acct_tmo }}
-timeout={{ radius_timeout }}
-max-try={{ radius_max_try }}
-{%     if radius_nas_id %}
-nas-identifier={{ radius_nas_id }}
-{%     endif %}
-{%     if radius_nas_ip %}
-nas-ip-address={{ radius_nas_ip }}
-{%     endif %}
-{%     if radius_source_address %}
-bind={{ radius_source_address }}
-{%     endif %}
+ifname=l2tp%d
+ppp-max-mtu={{ mtu }}
+mppe={{ ppp_options.mppe }}
+{% if outside_address is vyos_defined %}
+bind={{ outside_address }}
 {% endif %}
-{% if gateway_address %}
-gw-ip-address={{ gateway_address }}
+{% if lns.shared_secret is vyos_defined %}
+secret={{ lns.shared_secret }}
+{% endif %}
+{% if lns.host_name is vyos_defined %}
+host-name={{ lns.host_name }}
+{% endif %}
+{% if default_pool is vyos_defined %}
+ip-pool={{ default_pool }}
+{% endif %}
+{% if default_ipv6_pool is vyos_defined %}
+ipv6-pool={{ default_ipv6_pool }}
+ipv6-pool-delegate={{ default_ipv6_pool }}
 {% endif %}
 
-[ppp]
-verbose=1
-check-ip=1
-single-session=replace
-lcp-echo-timeout={{ ppp_echo_timeout }}
-lcp-echo-interval={{ ppp_echo_interval }}
-lcp-echo-failure={{ ppp_echo_failure }}
-{% if ccp_disable %}
-ccp=0
-{% endif %}
-{% if ppp_ipv6 is vyos_defined %}
-ipv6={{ ppp_ipv6 }}
-{% else %}
-{{ 'ipv6=allow' if client_ipv6_pool_configured else '' }}
-{% endif %}
-{% if ppp_ipv6_intf_id is vyos_defined %}
-ipv6-intf-id={{ ppp_ipv6_intf_id }}
-{% endif %}
-{% if ppp_ipv6_peer_intf_id is vyos_defined %}
-ipv6-peer-intf-id={{ ppp_ipv6_peer_intf_id }}
-{% endif %}
-ipv6-accept-peer-intf-id={{ "1" if ppp_ipv6_accept_peer_intf_id else "0" }}
+{# Common IP pool definitions #}
+{% include 'accel-ppp/config_ip_pool.j2' %}
 
-{% if client_ipv6_pool %}
-[ipv6-pool]
-{%     for p in client_ipv6_pool %}
-{{ p.prefix }},{{ p.mask }}
-{%     endfor %}
-{%     for p in client_ipv6_delegate_prefix %}
-delegate={{ p.prefix }},{{ p.mask }}
-{%     endfor %}
-{% endif %}
+{# Common IPv6 pool definitions #}
+{% include 'accel-ppp/config_ipv6_pool.j2' %}
 
-{% if client_ipv6_delegate_prefix %}
-[ipv6-dhcp]
-verbose=1
-{% endif %}
+{# Common DNS name-server definition #}
+{% include 'accel-ppp/config_name_server.j2' %}
 
-{% if radius_shaper_attr %}
-[shaper]
-verbose=1
-attr={{ radius_shaper_attr }}
-{%     if radius_shaper_vendor %}
-vendor={{ radius_shaper_vendor }}
-{%     endif %}
-{% endif %}
+{# Common wins-server definition #}
+{% include 'accel-ppp/config_wins_server.j2' %}
+
+{# Common chap-secrets and RADIUS server/option definitions #}
+{% include 'accel-ppp/config_chap_secrets_radius.j2' %}
+
+{# Common ppp-options definitions #}
+{% include 'accel-ppp/ppp-options.j2' %}
+
+{# Common RADIUS shaper configuration #}
+{% include 'accel-ppp/config_shaper_radius.j2' %}
+
+{# Common Extended scripts configuration #}
+{% include 'accel-ppp/config_extended_scripts.j2' %}
+
+{# Common Limits configuration #}
+{% include 'accel-ppp/config_limits.j2' %}
+
+{# Common SNMP definitions #}
+{% include 'accel-ppp/config_snmp.j2' %}
 
 [cli]
 tcp=127.0.0.1:2004
-sessions-columns=ifname,username,calling-sid,ip,{{ ip6_column | join(',') }}{{ ',' if ip6_column }}rate-limit,type,comp,state,rx-bytes,tx-bytes,uptime
 

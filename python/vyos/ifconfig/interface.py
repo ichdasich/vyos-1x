@@ -1,4 +1,4 @@
-# Copyright 2019-2023 VyOS maintainers and contributors <maintainers@vyos.io>
+# Copyright 2019-2024 VyOS maintainers and contributors <maintainers@vyos.io>
 #
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
@@ -35,7 +35,6 @@ from vyos.defaults import directories
 from vyos.template import render
 from vyos.utils.network import mac2eui64
 from vyos.utils.dict import dict_search
-from vyos.utils.file import read_file
 from vyos.utils.network import get_interface_config
 from vyos.utils.network import get_interface_namespace
 from vyos.utils.network import is_netns_interface
@@ -43,6 +42,7 @@ from vyos.utils.process import is_systemd_service_active
 from vyos.utils.process import run
 from vyos.template import is_ipv4
 from vyos.template import is_ipv6
+from vyos.utils.file import read_file
 from vyos.utils.network import is_intf_addr_assigned
 from vyos.utils.network import is_ipv6_link_local
 from vyos.utils.assertion import assert_boolean
@@ -115,7 +115,7 @@ class Interface(Control):
         },
         'vrf': {
             'shellcmd': 'ip -json -detail link list dev {ifname}',
-            'format': lambda j: jmespath.search('[*].master | [0]', json.loads(j)),
+            'format': lambda j: jmespath.search('[?linkinfo.info_slave_kind == `vrf`].master | [0]', json.loads(j)),
         },
     }
 
@@ -194,6 +194,9 @@ class Interface(Control):
             'validate': assert_positive,
             'location': '/proc/sys/net/ipv6/conf/{ifname}/dad_transmits',
         },
+        'ipv6_cache_tmo': {
+            'location': '/proc/sys/net/ipv6/neigh/{ifname}/base_reachable_time_ms',
+        },
         'path_cost': {
             # XXX: we should set a maximum
             'validate': assert_positive,
@@ -261,6 +264,9 @@ class Interface(Control):
         },
         'ipv6_dad_transmits': {
             'location': '/proc/sys/net/ipv6/conf/{ifname}/dad_transmits',
+        },
+        'ipv6_cache_tmo': {
+            'location': '/proc/sys/net/ipv6/neigh/{ifname}/base_reachable_time_ms',
         },
         'proxy_arp': {
             'location': '/proc/sys/net/ipv4/conf/{ifname}/proxy_arp',
@@ -415,7 +421,7 @@ class Interface(Control):
         else:
             nft_del_element = f'delete element inet vrf_zones ct_iface_map {{ "{self.ifname}" }}'
             # Check if deleting is possible first to avoid raising errors
-            _, err = self._popen(f'nft -c {nft_del_element}')
+            _, err = self._popen(f'nft --check {nft_del_element}')
             if not err:
                 # Remove map element
                 self._cmd(f'nft {nft_del_element}')
@@ -613,6 +619,21 @@ class Interface(Control):
         if tmp == tmo:
             return None
         return self.set_interface('arp_cache_tmo', tmo)
+
+    def set_ipv6_cache_tmo(self, tmo):
+        """
+        Set IPv6 cache timeout value in seconds. Internal Kernel representation
+        is in milliseconds.
+
+        Example:
+        >>> from vyos.ifconfig import Interface
+        >>> Interface('eth0').set_ipv6_cache_tmo(40)
+        """
+        tmo = str(int(tmo) * 1000)
+        tmp = self.get_interface('ipv6_cache_tmo')
+        if tmp == tmo:
+            return None
+        return self.set_interface('ipv6_cache_tmo', tmo)
 
     def _cleanup_mss_rules(self, table, ifname):
         commands = []
@@ -1336,12 +1357,13 @@ class Interface(Control):
         if enable and 'disable' not in self.config:
             if dict_search('dhcp_options.host_name', self.config) == None:
                 # read configured system hostname.
-                # maybe change to vyos hostd client ???
+                # maybe change to vyos-hostsd client ???
                 hostname = 'vyos'
-                with open('/etc/hostname', 'r') as f:
-                    hostname = f.read().rstrip('\n')
-                    tmp = {'dhcp_options' : { 'host_name' : hostname}}
-                    self.config = dict_merge(tmp, self.config)
+                hostname_file = '/etc/hostname'
+                if os.path.isfile(hostname_file):
+                    hostname = read_file(hostname_file)
+                tmp = {'dhcp_options' : { 'host_name' : hostname}}
+                self.config = dict_merge(tmp, self.config)
 
             render(systemd_override_file, 'dhcp-client/override.conf.j2', self.config)
             render(dhclient_config_file, 'dhcp-client/ipv4.j2', self.config)
@@ -1375,15 +1397,19 @@ class Interface(Control):
         ifname = self.ifname
         config_base = directories['dhcp6_client_dir']
         config_file = f'{config_base}/dhcp6c.{ifname}.conf'
+        script_file = f'/etc/wide-dhcpv6/dhcp6c.{ifname}.script' # can not live under /run b/c of noexec mount option
         systemd_override_file = f'/run/systemd/system/dhcp6c@{ifname}.service.d/10-override.conf'
         systemd_service = f'dhcp6c@{ifname}.service'
 
-        # Rendered client configuration files require the apsolute config path
-        self.config['dhcp6_client_dir'] = directories['dhcp6_client_dir']
+        # Rendered client configuration files require additional settings
+        config = deepcopy(self.config)
+        config['dhcp6_client_dir'] = directories['dhcp6_client_dir']
+        config['dhcp6_script_file'] = script_file
 
-        if enable and 'disable' not in self.config:
-            render(systemd_override_file, 'dhcp-client/ipv6.override.conf.j2', self.config)
-            render(config_file, 'dhcp-client/ipv6.j2', self.config)
+        if enable and 'disable' not in config:
+            render(systemd_override_file, 'dhcp-client/ipv6.override.conf.j2', config)
+            render(config_file, 'dhcp-client/ipv6.j2', config)
+            render(script_file, 'dhcp-client/dhcp6c-script.j2', config, permission=0o755)
 
             # Reload systemd unit definitons as some options are dynamically generated
             self._cmd('systemctl daemon-reload')
@@ -1396,6 +1422,8 @@ class Interface(Control):
                 self._cmd(f'systemctl stop {systemd_service}')
             if os.path.isfile(config_file):
                 os.remove(config_file)
+            if os.path.isfile(script_file):
+                os.remove(script_file)
 
         return None
 
@@ -1692,6 +1720,11 @@ class Interface(Control):
         if tmp:
             for addr in tmp:
                 self.add_ipv6_eui64_address(addr)
+
+        # Configure IPv6 base time in milliseconds - has default value
+        tmp = dict_search('ipv6.base_reachable_time', config)
+        value = tmp if (tmp != None) else '30'
+        self.set_ipv6_cache_tmo(value)
 
         # re-add ourselves to any bridge we might have fallen out of
         if 'is_bridge_member' in config:

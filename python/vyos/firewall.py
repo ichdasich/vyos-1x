@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-#
-# Copyright (C) 2021-2023 VyOS maintainers and contributors
+# Copyright (C) 2021-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -30,9 +28,25 @@ from vyos.template import is_ipv4
 from vyos.template import render
 from vyos.utils.dict import dict_search_args
 from vyos.utils.dict import dict_search_recursive
-from vyos.utils.process import call
 from vyos.utils.process import cmd
 from vyos.utils.process import run
+
+# Conntrack
+def conntrack_required(conf):
+    required_nodes = ['nat', 'nat66', 'load-balancing wan']
+
+    for path in required_nodes:
+        if conf.exists(path):
+            return True
+
+    firewall = conf.get_config_dict(['firewall'], key_mangling=('-', '_'),
+                                    no_tag_node_value_mangle=True, get_first_key=True)
+
+    for rules, path in dict_search_recursive(firewall, 'rule'):
+        if any(('state' in rule_conf or 'connection_status' in rule_conf or 'offload_target' in rule_conf) for rule_conf in rules.values()):
+            return True
+
+    return False
 
 # Domain Resolver
 
@@ -48,7 +62,7 @@ def fqdn_config_parse(firewall):
         rule = path[4]
         suffix = path[5][0]
         set_name = f'{hook_name}_{priority}_{rule}_{suffix}'
-            
+
         if (path[0] == 'ipv4') and (path[1] == 'forward' or path[1] == 'input' or path[1] == 'output' or path[1] == 'name'):
             firewall['ip_fqdn'][set_name] = domain
         elif (path[0] == 'ipv6') and (path[1] == 'forward' or path[1] == 'input' or path[1] == 'output' or path[1] == 'name'):
@@ -67,7 +81,7 @@ def fqdn_resolve(fqdn, ipv6=False):
 
 def find_nftables_rule(table, chain, rule_matches=[]):
     # Find rule in table/chain that matches all criteria and return the handle
-    results = cmd(f'sudo nft -a list chain {table} {chain}').split("\n")
+    results = cmd(f'sudo nft --handle list chain {table} {chain}').split("\n")
     for line in results:
         if all(rule_match in line for rule_match in rule_matches):
             handle_search = re.search('handle (\d+)', line)
@@ -118,10 +132,10 @@ def parse_rule(rule_conf, hook, fw_name, rule_id, ip_name):
     if 'connection_status' in rule_conf and rule_conf['connection_status']:
         status = rule_conf['connection_status']
         if status['nat'] == 'destination':
-            nat_status = '{dnat}'
+            nat_status = 'dnat'
             output.append(f'ct status {nat_status}')
         if status['nat'] == 'source':
-            nat_status = '{snat}'
+            nat_status = 'snat'
             output.append(f'ct status {nat_status}')
 
     if 'protocol' in rule_conf and rule_conf['protocol'] != 'all':
@@ -164,6 +178,8 @@ def parse_rule(rule_conf, hook, fw_name, rule_id, ip_name):
                     hook_name = 'input'
                 if hook == 'OUT':
                     hook_name = 'output'
+                if hook == 'PRE':
+                    hook_name = 'prerouting'
                 if hook == 'NAM':
                     hook_name = f'name{def_suffix}'
                 output.append(f'{ip_name} {prefix}addr {operator} @FQDN_{hook_name}_{fw_name}_{rule_id}_{prefix}')
@@ -179,6 +195,8 @@ def parse_rule(rule_conf, hook, fw_name, rule_id, ip_name):
                     hook_name = 'input'
                 if hook == 'OUT':
                     hook_name = 'output'
+                if hook == 'PRE':
+                    hook_name = 'prerouting'
                 if hook == 'NAM':
                     hook_name = f'name'
                 output.append(f'{ip_name} {prefix}addr {operator} @GEOIP_CC{def_suffix}_{hook_name}_{fw_name}_{rule_id}')
@@ -226,6 +244,14 @@ def parse_rule(rule_conf, hook, fw_name, rule_id, ip_name):
                         operator = '!=' if exclude else '=='
                         operator = f'& {address_mask} {operator}'
                     output.append(f'{ip_name} {prefix}addr {operator} @A{def_suffix}_{group_name}')
+                elif 'dynamic_address_group' in group:
+                    group_name = group['dynamic_address_group']
+                    operator = ''
+                    exclude = group_name[0] == "!"
+                    if exclude:
+                        operator = '!='
+                        group_name = group_name[1:]
+                    output.append(f'{ip_name} {prefix}addr {operator} @DA{def_suffix}_{group_name}')
                 # Generate firewall group domain-group
                 elif 'domain_group' in group:
                     group_name = group['domain_group']
@@ -280,7 +306,7 @@ def parse_rule(rule_conf, hook, fw_name, rule_id, ip_name):
                 operator = '!='
                 iiface = iiface[1:]
             output.append(f'iifname {operator} {{{iiface}}}')
-        else:
+        elif 'group' in rule_conf['inbound_interface']:
             iiface = rule_conf['inbound_interface']['group']
             if iiface[0] == '!':
                 operator = '!='
@@ -295,7 +321,7 @@ def parse_rule(rule_conf, hook, fw_name, rule_id, ip_name):
                 operator = '!='
                 oiface = oiface[1:]
             output.append(f'oifname {operator} {{{oiface}}}')
-        else:
+        elif 'group' in rule_conf['outbound_interface']:
             oiface = rule_conf['outbound_interface']['group']
             if oiface[0] == '!':
                 operator = '!='
@@ -419,12 +445,42 @@ def parse_rule(rule_conf, hook, fw_name, rule_id, ip_name):
 
     output.append('counter')
 
+    if 'add_address_to_group' in rule_conf:
+        for side in ['destination_address', 'source_address']:
+            if side in rule_conf['add_address_to_group']:
+                prefix = side[0]
+                side_conf = rule_conf['add_address_to_group'][side]
+                dyn_group = side_conf['address_group']
+                if 'timeout' in side_conf:
+                    timeout_value = side_conf['timeout']
+                    output.append(f'set update ip{def_suffix} {prefix}addr timeout {timeout_value} @DA{def_suffix}_{dyn_group}')
+                else:
+                    output.append(f'set update ip{def_suffix} saddr @DA{def_suffix}_{dyn_group}')
+
+    set_table = False
     if 'set' in rule_conf:
-        output.append(parse_policy_set(rule_conf['set'], def_suffix))
+        # Parse set command used in policy route:
+        if 'connection_mark' in rule_conf['set']:
+            conn_mark = rule_conf['set']['connection_mark']
+            output.append(f'ct mark set {conn_mark}')
+        if 'dscp' in rule_conf['set']:
+            dscp = rule_conf['set']['dscp']
+            output.append(f'ip{def_suffix} dscp set {dscp}')
+        if 'mark' in rule_conf['set']:
+            mark = rule_conf['set']['mark']
+            output.append(f'meta mark set {mark}')
+        if 'table' in rule_conf['set']:
+            set_table = True
+            table = rule_conf['set']['table']
+            if table == 'main':
+                table = '254'
+            mark = 0x7FFFFFFF - int(table)
+            output.append(f'meta mark set {mark}')
+        if 'tcp_mss' in rule_conf['set']:
+            mss = rule_conf['set']['tcp_mss']
+            output.append(f'tcp option maxseg size set {mss}')
 
     if 'action' in rule_conf:
-        # Change action=return to action=action
-        # #output.append(nft_action(rule_conf['action']))
         if rule_conf['action'] == 'offload':
             offload_target = rule_conf['offload_target']
             output.append(f'flow add @VYOS_FLOWTABLE_{offload_target}')
@@ -454,7 +510,8 @@ def parse_rule(rule_conf, hook, fw_name, rule_id, ip_name):
                 output.append(f'wscale {synproxy_ws} timestamp sack-perm')
 
     else:
-        output.append('return')
+        if set_table:
+            output.append('return')
 
     output.append(f'comment "{family}-{hook}-{fw_name}-{rule_id}"')
     return " ".join(output)
@@ -484,28 +541,6 @@ def parse_time(time):
         days = time['weekdays'].split(",")
         out_days = [f'"{day}"' for day in days if day[0] != '!']
         out.append(f'day {{{",".join(out_days)}}}')
-    return " ".join(out)
-
-def parse_policy_set(set_conf, def_suffix):
-    out = []
-    if 'connection_mark' in set_conf:
-        conn_mark = set_conf['connection_mark']
-        out.append(f'ct mark set {conn_mark}')
-    if 'dscp' in set_conf:
-        dscp = set_conf['dscp']
-        out.append(f'ip{def_suffix} dscp set {dscp}')
-    if 'mark' in set_conf:
-        mark = set_conf['mark']
-        out.append(f'meta mark set {mark}')
-    if 'table' in set_conf:
-        table = set_conf['table']
-        if table == 'main':
-            table = '254'
-        mark = 0x7FFFFFFF - int(table)
-        out.append(f'meta mark set {mark}')
-    if 'tcp_mss' in set_conf:
-        mss = set_conf['tcp_mss']
-        out.append(f'tcp option maxseg size set {mss}')
     return " ".join(out)
 
 # GeoIP
@@ -617,7 +652,7 @@ def geoip_update(firewall, force=False):
             'ipv6_sets': ipv6_sets
         })
 
-        result = run(f'nft -f {nftables_geoip_conf}')
+        result = run(f'nft --file {nftables_geoip_conf}')
         if result != 0:
             print('Error: GeoIP failed to update firewall')
             return False

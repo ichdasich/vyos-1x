@@ -28,9 +28,6 @@ from vyos.configquery import ConfigTreeQuery
 from vyos.utils.process import cmd
 from vyos.utils.dict import dict_search
 
-base = 'nat'
-unconf_message = 'NAT is not configured'
-
 ArgDirection = typing.Literal['source', 'destination']
 ArgFamily = typing.Literal['inet', 'inet6']
 
@@ -102,6 +99,23 @@ def _get_raw_translation(direction, family, address=None):
 
 
 def _get_formatted_output_rules(data, direction, family):
+    def _get_ports_for_output(my_dict):
+        # Get and insert all configured ports or port ranges into output string
+        for index, port in enumerate(my_dict['set']):
+            if 'range' in str(my_dict['set'][index]):
+                output = my_dict['set'][index]['range']
+                output = '-'.join(map(str, output))
+            else:
+                output = str(port)
+            if index == 0:
+                output = str(output)
+            else:
+                output = ','.join([output,output])
+        # Handle case where configured ports are a negated list
+        if my_dict['op'] == '!=':
+            output = '!' + output
+        return(output)
+
     # Add default values before loop
     sport, dport, proto = 'any', 'any', 'any'
     saddr = '::/0' if family == 'inet6' else '0.0.0.0/0'
@@ -129,21 +143,9 @@ def _get_formatted_output_rules(data, direction, family):
                     elif my_dict['field'] == 'daddr':
                         daddr = f'{op}{my_dict["prefix"]["addr"]}/{my_dict["prefix"]["len"]}'
                     elif my_dict['field'] == 'sport':
-                        # Port range or single port
-                        if jmespath.search('set[*].range', my_dict):
-                            sport = my_dict['set'][0]['range']
-                            sport = '-'.join(map(str, sport))
-                        else:
-                            sport = my_dict.get('set')
-                            sport = ','.join(map(str, sport))
+                        sport = _get_ports_for_output(my_dict)
                     elif my_dict['field'] == 'dport':
-                        # Port range or single port
-                        if jmespath.search('set[*].range', my_dict):
-                            dport = my_dict["set"][0]["range"]
-                            dport = '-'.join(map(str, dport))
-                        else:
-                            dport = my_dict.get('set')
-                            dport = ','.join(map(str, dport))
+                        dport = _get_ports_for_output(my_dict)
                 else:
                     field = jmespath.search('left.payload.field', match)
                     if field == 'saddr':
@@ -266,7 +268,7 @@ def _get_formatted_translation(dict_data, nat_direction, family, verbose):
                     proto = meta['layer4']['protoname']
             if direction == 'independent':
                 conn_id = meta['id']
-                timeout = meta['timeout']
+                timeout = meta.get('timeout', 'n/a')
                 orig_src = f'{orig_src}:{orig_sport}' if orig_sport else orig_src
                 orig_dst = f'{orig_dst}:{orig_dport}' if orig_dport else orig_dst
                 reply_src = f'{reply_src}:{reply_sport}' if reply_sport else reply_src
@@ -293,8 +295,9 @@ def _verify(func):
     @wraps(func)
     def _wrapper(*args, **kwargs):
         config = ConfigTreeQuery()
+        base = 'nat66' if 'inet6' in sys.argv[1:] else 'nat'
         if not config.exists(base):
-            raise vyos.opmode.UnconfiguredSubsystem(unconf_message)
+            raise vyos.opmode.UnconfiguredSubsystem(f'{base.upper()} is not configured')
         return func(*args, **kwargs)
     return _wrapper
 

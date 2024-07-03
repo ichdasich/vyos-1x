@@ -1,4 +1,4 @@
-# Copyright 2023 VyOS maintainers and contributors <maintainers@vyos.io>
+# Copyright 2023-2024 VyOS maintainers and contributors <maintainers@vyos.io>
 #
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
@@ -19,17 +19,23 @@ import sys
 import gzip
 import logging
 
-from typing import Optional, Tuple, Union
+from typing import Optional
+from typing import Tuple
 from filecmp import cmp
 from datetime import datetime
-from textwrap import dedent, indent
+from textwrap import dedent
 from pathlib import Path
 from tabulate import tabulate
 from shutil import copy, chown
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
+from urllib.parse import urlunsplit
 
 from vyos.config import Config
-from vyos.configtree import ConfigTree, ConfigTreeError, show_diff
+from vyos.configtree import ConfigTree
+from vyos.configtree import ConfigTreeError
+from vyos.configtree import show_diff
+from vyos.load_config import load
+from vyos.load_config import LoadConfigError
 from vyos.defaults import directories
 from vyos.version import get_full_version_data
 from vyos.utils.io import ask_yes_no
@@ -75,9 +81,11 @@ def save_config(target, json_out=None):
     if rc != 0:
         logger.critical(f'save config failed: {out}')
 
-def unsaved_commits() -> bool:
+def unsaved_commits(allow_missing_config=False) -> bool:
     if get_full_version_data()['boot_via'] == 'livecd':
         return False
+    if allow_missing_config and not os.path.exists(config_file):
+        return True
     tmp_save = '/tmp/config.running'
     save_config(tmp_save)
     ret = not cmp(tmp_save, config_file, shallow=False)
@@ -125,11 +133,15 @@ class ConfigMgmt:
                                    get_first_key=True)
 
         self.max_revisions = int(d.get('commit_revisions', 0))
+        self.num_revisions = 0
         self.locations = d.get('commit_archive', {}).get('location', [])
         self.source_address = d.get('commit_archive',
                                     {}).get('source_address', '')
         if config.exists(['system', 'host-name']):
             self.hostname = config.return_value(['system', 'host-name'])
+            if config.exists(['system', 'domain-name']):
+                tmp = config.return_value(['system', 'domain-name'])
+                self.hostname += f'.{tmp}'
         else:
             self.hostname = 'vyos'
 
@@ -233,7 +245,7 @@ Proceed ?'''
         msg = ''
 
         if not self._check_revision_number(rev):
-            msg = f'Invalid revision number {rev}: must be 0 < rev < {maxrev}'
+            msg = f'Invalid revision number {rev}: must be 0 < rev < {self.num_revisions}'
             return msg, 1
 
         prompt_str = 'Proceed with reboot ?'
@@ -258,6 +270,25 @@ Proceed ?'''
         rc, out = rc_cmd('sudo systemctl reboot')
         if rc != 0:
             raise ConfigMgmtError(out)
+
+        return msg, 0
+
+    def rollback_soft(self, rev: int):
+        """Rollback without reboot (rollback-soft)
+        """
+        msg = ''
+
+        if not self._check_revision_number(rev):
+            msg = f'Invalid revision number {rev}: must be 0 < rev < {self.num_revisions}'
+            return msg, 1
+
+        rollback_ct = self._get_config_tree_revision(rev)
+        try:
+            load(rollback_ct, switch='explicit')
+            print('Rollback diff has been applied.')
+            print('Use "compare" to review the changes or "commit" to apply them.')
+        except LoadConfigError as e:
+            raise ConfigMgmtError(e) from e
 
         return msg, 0
 
@@ -385,15 +416,8 @@ Proceed ?'''
             _, _, netloc = url.netloc.rpartition("@")
             redacted_location = urlunsplit(url._replace(netloc=netloc))
             print(f"  {redacted_location}", end=" ", flush=True)
-            try:
-                upload(archive_config_file, f'{location}/{remote_file}',
-                       source_host=source_address, raise_error=True)
-                print("OK")
-            except Exception as e:
-                print("FAILED!")
-                print()
-                print(indent(str(e), "   > "))
-                print()
+            upload(archive_config_file, f'{location}/{remote_file}',
+                   source_host=source_address)
 
     # op-mode functions
     #
@@ -462,13 +486,10 @@ Proceed ?'''
 
     # utility functions
     #
-    @staticmethod
-    def _strip_version(s):
-        return re.split(r'(^//)', s, maxsplit=1, flags=re.MULTILINE)[0]
 
     def _get_saved_config_tree(self):
         with open(config_file) as f:
-            c = self._strip_version(f.read())
+            c = f.read()
         return ConfigTree(c)
 
     def _get_file_revision(self, rev: int):
@@ -480,7 +501,7 @@ Proceed ?'''
         return r
 
     def _get_config_tree_revision(self, rev: int):
-        c = self._strip_version(self._get_file_revision(rev))
+        c = self._get_file_revision(rev)
         return ConfigTree(c)
 
     def _add_logrotate_conf(self):
@@ -560,8 +581,8 @@ Proceed ?'''
         return len(l)
 
     def _check_revision_number(self, rev: int) -> bool:
-        maxrev = self._get_number_of_revisions()
-        if not 0 <= rev < maxrev:
+        self.num_revisions = self._get_number_of_revisions()
+        if not 0 <= rev < self.num_revisions:
             return False
         return True
 
@@ -702,6 +723,11 @@ def run():
                           help="Revision number for rollback")
     rollback.add_argument('-y', dest='no_prompt', action='store_true',
                           help="Excute without prompt")
+
+    rollback_soft = subparsers.add_parser('rollback_soft',
+                                     help="Rollback to earlier config")
+    rollback_soft.add_argument('--rev', type=int,
+                          help="Revision number for rollback")
 
     compare = subparsers.add_parser('compare',
                                     help="Compare config files")

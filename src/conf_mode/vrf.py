@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2020-2023 VyOS maintainers and contributors
+# Copyright (C) 2020-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -14,8 +14,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import os
-
 from sys import exit
 from json import loads
 
@@ -23,6 +21,7 @@ from vyos.config import Config
 from vyos.configdict import dict_merge
 from vyos.configdict import node_changed
 from vyos.configverify import verify_route_map
+from vyos.firewall import conntrack_required
 from vyos.ifconfig import Interface
 from vyos.template import render
 from vyos.template import render_to_string
@@ -33,7 +32,6 @@ from vyos.utils.network import interface_exists
 from vyos.utils.process import call
 from vyos.utils.process import cmd
 from vyos.utils.process import popen
-from vyos.utils.process import run
 from vyos.utils.system import sysctl_write
 from vyos import ConfigError
 from vyos import frr
@@ -41,16 +39,34 @@ from vyos import airbag
 airbag.enable()
 
 config_file = '/etc/iproute2/rt_tables.d/vyos-vrf.conf'
-nft_vrf_config = '/tmp/nftables-vrf-zones'
+k_mod = ['vrf']
 
-def has_rule(af : str, priority : int, table : str):
-    """ Check if a given ip rule exists """
+nftables_table = 'inet vrf_zones'
+nftables_rules = {
+    'vrf_zones_ct_in': 'counter ct original zone set iifname map @ct_iface_map',
+    'vrf_zones_ct_out': 'counter ct original zone set oifname map @ct_iface_map'
+}
+
+def has_rule(af : str, priority : int, table : str=None):
+    """
+    Check if a given ip rule exists
+    $ ip --json -4 rule show
+    [{'l3mdev': None, 'priority': 1000, 'src': 'all'},
+    {'action': 'unreachable', 'l3mdev': None, 'priority': 2000, 'src': 'all'},
+    {'priority': 32765, 'src': 'all', 'table': 'local'},
+    {'priority': 32766, 'src': 'all', 'table': 'main'},
+    {'priority': 32767, 'src': 'all', 'table': 'default'}]
+    """
     if af not in ['-4', '-6']:
         raise ValueError()
-    command = f'ip -j {af} rule show'
+    command = f'ip --detail --json {af} rule show'
     for tmp in loads(cmd(command)):
-        if {'priority', 'table'} <= set(tmp):
+        if 'priority' in tmp and 'table' in tmp:
             if tmp['priority'] == priority and tmp['table'] == table:
+                return True
+        elif 'priority' in tmp and table in tmp:
+            # l3mdev table has a different layout
+            if tmp['priority'] == priority:
                 return True
     return False
 
@@ -104,17 +120,15 @@ def get_config(config=None):
         routes = vrf_routing(conf, name)
         if routes: vrf['vrf_remove'][name]['route'] = routes
 
+    if 'name' in vrf:
+        vrf['conntrack'] = conntrack_required(conf)
+
     # We also need the route-map information from the config
     #
     # XXX: one MUST always call this without the key_mangling() option! See
     # vyos.configverify.verify_common_route_maps() for more information.
     tmp = {'policy' : {'route-map' : conf.get_config_dict(['policy', 'route-map'],
                                                           get_first_key=True)}}
-
-    # L3VNI setup is done via vrf_vni.py as it must be de-configured (on node
-    # deletetion prior to the BGP process. Tell the Jinja2 template no VNI
-    # setup is needed
-    vrf.update({'no_vni' : ''})
 
     # Merge policy dict into "regular" config dict
     vrf = dict_merge(tmp, vrf)
@@ -173,8 +187,6 @@ def verify(vrf):
 def generate(vrf):
     # Render iproute2 VR helper names
     render(config_file, 'iproute2/vrf.conf.j2', vrf)
-    # Render nftables zones config
-    render(nft_vrf_config, 'firewall/nftables-vrf-zones.j2', vrf)
     # Render VRF Kernel/Zebra route-map filters
     vrf['frr_zebra_config'] = render_to_string('frr/zebra.vrf.route-map.frr.j2', vrf)
 
@@ -209,20 +221,16 @@ def apply(vrf):
 
             # Remove nftables conntrack zone map item
             nft_del_element = f'delete element inet vrf_zones ct_iface_map {{ "{tmp}" }}'
-            cmd(f'nft {nft_del_element}')
+            # Check if deleting is possible first to avoid raising errors
+            _, err = popen(f'nft --check {nft_del_element}')
+            if not err:
+                # Remove map element
+                cmd(f'nft {nft_del_element}')
 
             # Delete the VRF Kernel interface
             call(f'ip link delete dev {tmp}')
 
     if 'name' in vrf:
-        # Separate VRFs in conntrack table
-        # check if table already exists
-        _, err = popen('nft list table inet vrf_zones')
-        # If not, create a table
-        if err and os.path.exists(nft_vrf_config):
-            cmd(f'nft -f {nft_vrf_config}')
-            os.unlink(nft_vrf_config)
-
         # Linux routing uses rules to find tables - routing targets are then
         # looked up in those tables. If the lookup got a matching route, the
         # process ends.
@@ -294,6 +302,28 @@ def apply(vrf):
             nft_add_element = f'add element inet vrf_zones ct_iface_map {{ "{name}" : {table} }}'
             cmd(f'nft {nft_add_element}')
 
+        if vrf['conntrack']:
+            for chain, rule in nftables_rules.items():
+                cmd(f'nft add rule inet vrf_zones {chain} {rule}')
+
+    if 'name' not in vrf or not vrf['conntrack']:
+        for chain, rule in nftables_rules.items():
+            cmd(f'nft flush chain inet vrf_zones {chain}')
+
+    # Return default ip rule values
+    if 'name' not in vrf:
+        for afi in ['-4', '-6']:
+            # move lookup local to pref 0 (from 32765)
+            if not has_rule(afi, 0, 'local'):
+                call(f'ip {afi} rule add pref 0 from all lookup local')
+            if has_rule(afi, 32765, 'local'):
+                call(f'ip {afi} rule del pref 32765 table local')
+
+            if has_rule(afi, 1000, 'l3mdev'):
+                call(f'ip {afi} rule del pref 1000 l3mdev protocol kernel')
+            if has_rule(afi, 2000, 'l3mdev'):
+                call(f'ip {afi} rule del pref 2000 l3mdev unreachable')
+
     # Apply FRR filters
     zebra_daemon = 'zebra'
     # Save original configuration prior to starting any commit actions
@@ -305,13 +335,6 @@ def apply(vrf):
     if 'frr_zebra_config' in vrf:
         frr_cfg.add_before(frr.default_add_before, vrf['frr_zebra_config'])
     frr_cfg.commit_configuration(zebra_daemon)
-
-    # return to default lookup preference when no VRF is configured
-    if 'name' not in vrf:
-        # Remove VRF zones table from nftables
-        tmp = run('nft list table inet vrf_zones')
-        if tmp == 0:
-            cmd('nft delete table inet vrf_zones')
 
     return None
 

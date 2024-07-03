@@ -16,12 +16,15 @@
 
 import unittest
 
+from time import sleep
+
 from base_vyostest_shim import VyOSUnitTestSHIM
 
 from vyos.ifconfig import Section
 from vyos.configsession import ConfigSessionError
 from vyos.template import is_ipv6
 from vyos.utils.process import process_named_running
+from vyos.utils.process import cmd
 
 PROCESS_NAME = 'bgpd'
 ASN = '64512'
@@ -57,7 +60,7 @@ neighbor_config = {
         'route_map_out'    : route_map_out,
         'no_send_comm_ext' : '',
         'addpath_all'      : '',
-        'p_attr_discard'   : '123',
+        'p_attr_discard'   : ['10', '20', '30', '40', '50'],
         },
     '192.0.2.2' : {
         'bfd_profile'      : bfd_profile,
@@ -134,7 +137,7 @@ peer_group_config = {
         'cap_over'         : '',
         'ttl_security'     : '5',
         'disable_conn_chk' : '',
-        'p_attr_discard'   : '250',
+        'p_attr_discard'   : ['100', '150', '200'],
         },
     'bar' : {
         'remote_as'        : '111',
@@ -281,7 +284,8 @@ class TestProtocolsBGP(VyOSUnitTestSHIM.TestCase):
         if 'addpath_all' in peer_config:
             self.assertIn(f' neighbor {peer} addpath-tx-all-paths', frrconfig)
         if 'p_attr_discard' in peer_config:
-            self.assertIn(f' neighbor {peer} path-attribute discard {peer_config["p_attr_discard"]}', frrconfig)
+            tmp = ' '.join(peer_config["p_attr_discard"])
+            self.assertIn(f' neighbor {peer} path-attribute discard {tmp}', frrconfig)
         if 'p_attr_taw' in peer_config:
             self.assertIn(f' neighbor {peer} path-attribute treat-as-withdraw {peer_config["p_attr_taw"]}', frrconfig)
         if 'addpath_per_as' in peer_config:
@@ -316,8 +320,12 @@ class TestProtocolsBGP(VyOSUnitTestSHIM.TestCase):
         tcp_keepalive_interval = '77'
         tcp_keepalive_probes = '22'
 
-        self.cli_set(base_path + ['parameters', 'router-id', router_id])
+        self.cli_set(base_path + ['parameters', 'allow-martian-nexthop'])
+        self.cli_set(base_path + ['parameters', 'disable-ebgp-connected-route-check'])
+        self.cli_set(base_path + ['parameters', 'no-hard-administrative-reset'])
         self.cli_set(base_path + ['parameters', 'log-neighbor-changes'])
+        self.cli_set(base_path + ['parameters', 'labeled-unicast', 'explicit-null'])
+        self.cli_set(base_path + ['parameters', 'router-id', router_id])
 
         # System AS number MUST be defined - as this is set in setUp() we remove
         # this once for testing of the proper error
@@ -364,12 +372,16 @@ class TestProtocolsBGP(VyOSUnitTestSHIM.TestCase):
         frrconfig = self.getFRRconfig(f'router bgp {ASN}')
         self.assertIn(f'router bgp {ASN}', frrconfig)
         self.assertIn(f' bgp router-id {router_id}', frrconfig)
+        self.assertIn(f' bgp allow-martian-nexthop', frrconfig)
+        self.assertIn(f' bgp disable-ebgp-connected-route-check', frrconfig)
         self.assertIn(f' bgp log-neighbor-changes', frrconfig)
         self.assertIn(f' bgp default local-preference {local_pref}', frrconfig)
         self.assertIn(f' bgp conditional-advertisement timer {cond_adv_timer}', frrconfig)
         self.assertIn(f' bgp fast-convergence', frrconfig)
         self.assertIn(f' bgp graceful-restart stalepath-time {stalepath_time}', frrconfig)
         self.assertIn(f' bgp graceful-shutdown', frrconfig)
+        self.assertIn(f' no bgp hard-administrative-reset', frrconfig)
+        self.assertIn(f' bgp labeled-unicast explicit-null', frrconfig)
         self.assertIn(f' bgp bestpath as-path multipath-relax', frrconfig)
         self.assertIn(f' bgp bestpath bandwidth default-weight-for-missing', frrconfig)
         self.assertIn(f' bgp bestpath compare-routerid', frrconfig)
@@ -451,7 +463,8 @@ class TestProtocolsBGP(VyOSUnitTestSHIM.TestCase):
             if 'update_src' in peer_config:
                 self.cli_set(base_path + ['neighbor', peer, 'update-source', peer_config["update_src"]])
             if 'p_attr_discard' in peer_config:
-                self.cli_set(base_path + ['neighbor', peer, 'path-attribute', 'discard', peer_config["p_attr_discard"]])
+                for attribute in peer_config['p_attr_discard']:
+                    self.cli_set(base_path + ['neighbor', peer, 'path-attribute', 'discard', attribute])
             if 'p_attr_taw' in peer_config:
                 self.cli_set(base_path + ['neighbor', peer, 'path-attribute', 'treat-as-withdraw', peer_config["p_attr_taw"]])
             if 'route_map_in' in peer_config:
@@ -575,7 +588,8 @@ class TestProtocolsBGP(VyOSUnitTestSHIM.TestCase):
             if 'disable_conn_chk' in config:
                 self.cli_set(base_path + ['peer-group', peer_group, 'disable-connected-check'])
             if 'p_attr_discard' in config:
-                self.cli_set(base_path + ['peer-group', peer_group, 'path-attribute', 'discard', config["p_attr_discard"]])
+                for attribute in config['p_attr_discard']:
+                    self.cli_set(base_path + ['peer-group', peer_group, 'path-attribute', 'discard', attribute])
             if 'p_attr_taw' in config:
                 self.cli_set(base_path + ['peer-group', peer_group, 'path-attribute', 'treat-as-withdraw', config["p_attr_taw"]])
 
@@ -616,6 +630,8 @@ class TestProtocolsBGP(VyOSUnitTestSHIM.TestCase):
         networks = {
             '10.0.0.0/8' : {
                 'as_set' : '',
+                'summary_only' : '',
+                'route_map' : route_map_in,
                 },
             '100.64.0.0/10' : {
                 'as_set' : '',
@@ -640,6 +656,9 @@ class TestProtocolsBGP(VyOSUnitTestSHIM.TestCase):
             if 'summary_only' in network_config:
                 self.cli_set(base_path + ['address-family', 'ipv4-unicast',
                                               'aggregate-address', network, 'summary-only'])
+            if 'route_map' in network_config:
+                self.cli_set(base_path + ['address-family', 'ipv4-unicast',
+                                              'aggregate-address', network, 'route-map', network_config['route_map']])
 
         # commit changes
         self.cli_commit()
@@ -654,10 +673,14 @@ class TestProtocolsBGP(VyOSUnitTestSHIM.TestCase):
 
         for network, network_config in networks.items():
             self.assertIn(f' network {network}', frrconfig)
+            command = f'aggregate-address {network}'
             if 'as_set' in network_config:
-                self.assertIn(f' aggregate-address {network} as-set', frrconfig)
+                command = f'{command} as-set'
             if 'summary_only' in network_config:
-                self.assertIn(f' aggregate-address {network} summary-only', frrconfig)
+                command = f'{command} summary-only'
+            if 'route_map' in network_config:
+                command = f'{command} route-map {network_config["route_map"]}'
+            self.assertIn(command, frrconfig)
 
     def test_bgp_05_afi_ipv6(self):
         networks = {
@@ -739,7 +762,7 @@ class TestProtocolsBGP(VyOSUnitTestSHIM.TestCase):
 
     def test_bgp_07_l2vpn_evpn(self):
         vnis = ['10010', '10020', '10030']
-        neighbors = ['192.0.2.10', '192.0.2.20', '192.0.2.30']
+        soo = '1.2.3.4:10000'
         evi_limit = '1000'
         route_targets = ['1.1.1.1:100', '1.1.1.1:200', '1.1.1.1:300']
 
@@ -751,6 +774,7 @@ class TestProtocolsBGP(VyOSUnitTestSHIM.TestCase):
         self.cli_set(base_path + ['address-family', 'l2vpn-evpn', 'default-originate', 'ipv6'])
         self.cli_set(base_path + ['address-family', 'l2vpn-evpn', 'disable-ead-evi-rx'])
         self.cli_set(base_path + ['address-family', 'l2vpn-evpn', 'disable-ead-evi-tx'])
+        self.cli_set(base_path + ['address-family', 'l2vpn-evpn', 'mac-vrf', 'soo', soo])
         for vni in vnis:
             self.cli_set(base_path + ['address-family', 'l2vpn-evpn', 'vni', vni, 'advertise-default-gw'])
             self.cli_set(base_path + ['address-family', 'l2vpn-evpn', 'vni', vni, 'advertise-svi-ip'])
@@ -774,6 +798,7 @@ class TestProtocolsBGP(VyOSUnitTestSHIM.TestCase):
         self.assertIn(f'  disable-ead-evi-rx', frrconfig)
         self.assertIn(f'  disable-ead-evi-tx', frrconfig)
         self.assertIn(f'  flooding disable', frrconfig)
+        self.assertIn(f'  mac-vrf soo {soo}', frrconfig)
         for vni in vnis:
             vniconfig = self.getFRRconfig(f'  vni {vni}')
             self.assertIn(f'vni {vni}', vniconfig)
@@ -1132,6 +1157,255 @@ class TestProtocolsBGP(VyOSUnitTestSHIM.TestCase):
             self.assertIn(f'interface {interface}', frrconfig)
             self.assertIn(f' mpls bgp forwarding', frrconfig)
             self.cli_delete(['interfaces', 'ethernet', interface, 'vrf'])
+
+    def test_bgp_24_srv6_sid(self):
+        locator_name = 'VyOS_foo'
+        sid = 'auto'
+        nexthop_ipv4 = '192.0.0.1'
+        nexthop_ipv6 = '2001:db8:100:200::2'
+
+        self.cli_set(base_path + ['srv6', 'locator', locator_name])
+        self.cli_set(base_path + ['sid', 'vpn', 'per-vrf', 'export', sid])
+        self.cli_set(base_path + ['address-family', 'ipv4-unicast', 'sid', 'vpn', 'export', sid])
+        # verify() - SID per VRF and SID per address-family are mutually exclusive!
+        with self.assertRaises(ConfigSessionError):
+            self.cli_commit()
+        self.cli_delete(base_path + ['address-family', 'ipv4-unicast', 'sid'])
+        self.cli_commit()
+
+        frrconfig = self.getFRRconfig(f'router bgp {ASN}')
+        self.assertIn(f'router bgp {ASN}', frrconfig)
+        self.assertIn(f' segment-routing srv6', frrconfig)
+        self.assertIn(f'  locator {locator_name}', frrconfig)
+        self.assertIn(f' sid vpn per-vrf export {sid}', frrconfig)
+
+        # Now test AFI SID
+        self.cli_delete(base_path + ['sid'])
+        self.cli_set(base_path + ['address-family', 'ipv4-unicast', 'sid', 'vpn', 'export', sid])
+        self.cli_set(base_path + ['address-family', 'ipv4-unicast', 'nexthop', 'vpn', 'export', nexthop_ipv4])
+        self.cli_set(base_path + ['address-family', 'ipv6-unicast', 'sid', 'vpn', 'export', sid])
+        self.cli_set(base_path + ['address-family', 'ipv6-unicast', 'nexthop', 'vpn', 'export', nexthop_ipv6])
+
+        self.cli_commit()
+
+        frrconfig = self.getFRRconfig(f'router bgp {ASN}')
+        self.assertIn(f'router bgp {ASN}', frrconfig)
+        self.assertIn(f' segment-routing srv6', frrconfig)
+        self.assertIn(f'  locator {locator_name}', frrconfig)
+
+        afiv4_config = self.getFRRconfig(' address-family ipv4 unicast')
+        self.assertIn(f' sid vpn export {sid}', afiv4_config)
+        self.assertIn(f' nexthop vpn export {nexthop_ipv4}', afiv4_config)
+        afiv6_config = self.getFRRconfig(' address-family ipv6 unicast')
+        self.assertIn(f' sid vpn export {sid}', afiv6_config)
+        self.assertIn(f' nexthop vpn export {nexthop_ipv6}', afiv4_config)
+
+    def test_bgp_25_ipv4_labeled_unicast_peer_group(self):
+        pg_ipv4 = 'foo4'
+        ipv4_max_prefix = '20'
+        ipv4_prefix = '192.0.2.0/24'
+
+        self.cli_set(base_path + ['listen', 'range', ipv4_prefix, 'peer-group', pg_ipv4])
+        self.cli_set(base_path + ['parameters', 'labeled-unicast', 'ipv4-explicit-null'])
+        self.cli_set(base_path + ['peer-group', pg_ipv4, 'address-family', 'ipv4-labeled-unicast', 'maximum-prefix', ipv4_max_prefix])
+        self.cli_set(base_path + ['peer-group', pg_ipv4, 'remote-as', 'external'])
+
+        self.cli_commit()
+
+        frrconfig = self.getFRRconfig(f'router bgp {ASN}')
+        self.assertIn(f'router bgp {ASN}', frrconfig)
+        self.assertIn(f' neighbor {pg_ipv4} peer-group', frrconfig)
+        self.assertIn(f' neighbor {pg_ipv4} remote-as external', frrconfig)
+        self.assertIn(f' bgp listen range {ipv4_prefix} peer-group {pg_ipv4}', frrconfig)
+        self.assertIn(f' bgp labeled-unicast ipv4-explicit-null', frrconfig)
+
+        afiv4_config = self.getFRRconfig(' address-family ipv4 labeled-unicast')
+        self.assertIn(f'  neighbor {pg_ipv4} activate', afiv4_config)
+        self.assertIn(f'  neighbor {pg_ipv4} maximum-prefix {ipv4_max_prefix}', afiv4_config)
+
+    def test_bgp_26_ipv6_labeled_unicast_peer_group(self):
+        pg_ipv6 = 'foo6'
+        ipv6_max_prefix = '200'
+        ipv6_prefix = '2001:db8:1000::/64'
+
+        self.cli_set(base_path + ['listen', 'range', ipv6_prefix, 'peer-group', pg_ipv6])
+        self.cli_set(base_path + ['parameters', 'labeled-unicast', 'ipv6-explicit-null'])
+
+        self.cli_set(base_path + ['peer-group', pg_ipv6, 'address-family', 'ipv6-labeled-unicast', 'maximum-prefix', ipv6_max_prefix])
+        self.cli_set(base_path + ['peer-group', pg_ipv6, 'remote-as', 'external'])
+
+        self.cli_commit()
+
+        frrconfig = self.getFRRconfig(f'router bgp {ASN}')
+        self.assertIn(f'router bgp {ASN}', frrconfig)
+        self.assertIn(f' neighbor {pg_ipv6} peer-group', frrconfig)
+        self.assertIn(f' neighbor {pg_ipv6} remote-as external', frrconfig)
+        self.assertIn(f' bgp listen range {ipv6_prefix} peer-group {pg_ipv6}', frrconfig)
+        self.assertIn(f' bgp labeled-unicast ipv6-explicit-null', frrconfig)
+
+        afiv6_config = self.getFRRconfig(' address-family ipv6 labeled-unicast')
+        self.assertIn(f'  neighbor {pg_ipv6} activate', afiv6_config)
+        self.assertIn(f'  neighbor {pg_ipv6} maximum-prefix {ipv6_max_prefix}', afiv6_config)
+
+    def test_bgp_27_route_reflector_client(self):
+        self.cli_set(base_path + ['peer-group', 'peer1', 'address-family', 'l2vpn-evpn', 'route-reflector-client'])
+        with self.assertRaises(ConfigSessionError) as e:
+            self.cli_commit()
+
+        self.cli_set(base_path + ['peer-group', 'peer1', 'remote-as', 'internal'])
+        self.cli_commit()
+
+        conf = self.getFRRconfig(' address-family l2vpn evpn')
+
+        self.assertIn('neighbor peer1 route-reflector-client', conf)
+
+    def test_bgp_28_peer_group_member_all_internal_or_external(self):
+        def _common_config_check(conf, include_ras=True):
+            if include_ras:
+                self.assertIn(f'neighbor {int_neighbors[0]} remote-as {ASN}', conf)
+                self.assertIn(f'neighbor {int_neighbors[1]} remote-as {ASN}', conf)
+                self.assertIn(f'neighbor {ext_neighbors[0]} remote-as {int(ASN) + 1}',conf)
+
+            self.assertIn(f'neighbor {int_neighbors[0]} peer-group {int_pg_name}', conf)
+            self.assertIn(f'neighbor {int_neighbors[1]} peer-group {int_pg_name}', conf)
+            self.assertIn(f'neighbor {ext_neighbors[0]} peer-group {ext_pg_name}', conf)
+
+        int_neighbors = ['192.0.2.2', '192.0.2.3']
+        ext_neighbors = ['192.122.2.2', '192.122.2.3']
+        int_pg_name, ext_pg_name = 'SMOKETESTINT', 'SMOKETESTEXT'
+
+        self.cli_set(base_path + ['neighbor', int_neighbors[0], 'peer-group', int_pg_name])
+        self.cli_set(base_path + ['neighbor', int_neighbors[0], 'remote-as', ASN])
+        self.cli_set(base_path + ['peer-group', int_pg_name, 'address-family', 'ipv4-unicast'])
+        self.cli_set(base_path + ['neighbor', ext_neighbors[0], 'peer-group', ext_pg_name])
+        self.cli_set(base_path + ['neighbor', ext_neighbors[0], 'remote-as', f'{int(ASN) + 1}'])
+        self.cli_set(base_path + ['peer-group', ext_pg_name, 'address-family', 'ipv4-unicast'])
+        self.cli_commit()
+
+        # test add external remote-as to internal group
+        self.cli_set(base_path + ['neighbor', int_neighbors[1], 'peer-group', int_pg_name])
+        self.cli_set(base_path + ['neighbor', int_neighbors[1], 'remote-as', f'{int(ASN) + 1}'])
+
+        with self.assertRaises(ConfigSessionError) as e:
+            self.cli_commit()
+        # self.assertIn('\nPeer-group members must be all internal or all external\n', str(e.exception))
+
+        # test add internal remote-as to internal group
+        self.cli_set(base_path + ['neighbor', int_neighbors[1], 'remote-as', ASN])
+        self.cli_commit()
+
+        conf = self.getFRRconfig(f'router bgp {ASN}')
+        _common_config_check(conf)
+
+        # test add internal remote-as to external group
+        self.cli_set(base_path + ['neighbor', ext_neighbors[1], 'peer-group', ext_pg_name])
+        self.cli_set(base_path + ['neighbor', ext_neighbors[1], 'remote-as', ASN])
+
+        with self.assertRaises(ConfigSessionError) as e:
+            self.cli_commit()
+        # self.assertIn('\nPeer-group members must be all internal or all external\n', str(e.exception))
+
+        # test add external remote-as to external group
+        self.cli_set(base_path + ['neighbor', ext_neighbors[1], 'remote-as', f'{int(ASN) + 2}'])
+        self.cli_commit()
+
+        conf = self.getFRRconfig(f'router bgp {ASN}')
+        _common_config_check(conf)
+        self.assertIn(f'neighbor {ext_neighbors[1]} remote-as {int(ASN) + 2}', conf)
+        self.assertIn(f'neighbor {ext_neighbors[1]} peer-group {ext_pg_name}', conf)
+
+        # test named remote-as
+        self.cli_set(base_path + ['neighbor', int_neighbors[0], 'remote-as', 'internal'])
+        self.cli_set(base_path + ['neighbor', int_neighbors[1], 'remote-as', 'internal'])
+        self.cli_set(base_path + ['neighbor', ext_neighbors[0], 'remote-as', 'external'])
+        self.cli_set(base_path + ['neighbor', ext_neighbors[1], 'remote-as', 'external'])
+        self.cli_commit()
+
+        conf = self.getFRRconfig(f'router bgp {ASN}')
+        _common_config_check(conf, include_ras=False)
+
+        self.assertIn(f'neighbor {int_neighbors[0]} remote-as internal', conf)
+        self.assertIn(f'neighbor {int_neighbors[1]} remote-as internal', conf)
+        self.assertIn(f'neighbor {ext_neighbors[0]} remote-as external', conf)
+        self.assertIn(f'neighbor {ext_neighbors[1]} remote-as external', conf)
+        self.assertIn(f'neighbor {ext_neighbors[1]} peer-group {ext_pg_name}', conf)
+
+    def test_bgp_29_peer_group_remote_as_equal_local_as(self):
+        self.cli_set(base_path + ['system-as', ASN])
+        self.cli_set(base_path + ['peer-group', 'OVERLAY', 'local-as', f'{int(ASN) + 1}'])
+        self.cli_set(base_path + ['peer-group', 'OVERLAY', 'remote-as', f'{int(ASN) + 1}'])
+        self.cli_set(base_path + ['peer-group', 'OVERLAY', 'address-family', 'l2vpn-evpn'])
+
+        self.cli_set(base_path + ['peer-group', 'UNDERLAY', 'address-family', 'ipv4-unicast'])
+
+        self.cli_set(base_path + ['neighbor', '10.177.70.62', 'peer-group', 'UNDERLAY'])
+        self.cli_set(base_path + ['neighbor', '10.177.70.62', 'remote-as', 'external'])
+
+        self.cli_set(base_path + ['neighbor', '10.177.75.1', 'peer-group', 'OVERLAY'])
+        self.cli_set(base_path + ['neighbor', '10.177.75.2', 'peer-group', 'OVERLAY'])
+
+        self.cli_commit()
+
+        conf = self.getFRRconfig(f'router bgp {ASN}')
+
+        self.assertIn(f'neighbor OVERLAY remote-as {int(ASN) + 1}', conf)
+        self.assertIn(f'neighbor OVERLAY local-as {int(ASN) + 1}', conf)
+
+    def test_bgp_99_bmp(self):
+        target_name = 'instance-bmp'
+        target_address = '127.0.0.1'
+        target_port = '5000'
+        min_retry = '1024'
+        max_retry = '2048'
+        monitor_ipv4 = 'pre-policy'
+        monitor_ipv6 = 'pre-policy'
+        mirror_buffer = '32000000'
+        bmp_path = base_path + ['bmp']
+        target_path = bmp_path + ['target', target_name]
+
+        # by default the 'bmp' module not loaded for the bgpd expect Error
+        self.cli_set(bmp_path)
+        if not process_named_running('bgpd', 'bmp'):
+            with self.assertRaises(ConfigSessionError):
+                self.cli_commit()
+
+        # add required 'bmp' module to bgpd and restart bgpd
+        self.cli_delete(bmp_path)
+        self.cli_set(['system', 'frr', 'bmp'])
+        self.cli_commit()
+
+        # restart bgpd to apply "-M bmp" and update PID
+        cmd(f'sudo kill -9 {self.daemon_pid}')
+        # let the bgpd process recover
+        sleep(10)
+        # update daemon PID - this was a planned daemon restart
+        self.daemon_pid = process_named_running(PROCESS_NAME)
+
+        # set bmp config but not set address
+        self.cli_set(target_path + ['port', target_port])
+        # address is not set, expect Error
+        with self.assertRaises(ConfigSessionError):
+            self.cli_commit()
+
+        # config other bmp options
+        self.cli_set(target_path + ['address', target_address])
+        self.cli_set(bmp_path + ['mirror-buffer-limit', mirror_buffer])
+        self.cli_set(target_path + ['port', target_port])
+        self.cli_set(target_path + ['min-retry', min_retry])
+        self.cli_set(target_path + ['max-retry', max_retry])
+        self.cli_set(target_path + ['mirror'])
+        self.cli_set(target_path + ['monitor', 'ipv4-unicast', monitor_ipv4])
+        self.cli_set(target_path + ['monitor', 'ipv6-unicast', monitor_ipv6])
+        self.cli_commit()
+
+        # Verify bgpd bmp configuration
+        frrconfig = self.getFRRconfig(f'router bgp {ASN}')
+        self.assertIn(f'bmp mirror buffer-limit {mirror_buffer}', frrconfig)
+        self.assertIn(f'bmp targets {target_name}', frrconfig)
+        self.assertIn(f'bmp mirror', frrconfig)
+        self.assertIn(f'bmp monitor ipv4 unicast {monitor_ipv4}', frrconfig)
+        self.assertIn(f'bmp monitor ipv6 unicast {monitor_ipv6}', frrconfig)
+        self.assertIn(f'bmp connect {target_address} port {target_port} min-retry {min_retry} max-retry {max_retry}', frrconfig)
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

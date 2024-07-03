@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2020-2022 VyOS maintainers and contributors
+# Copyright (C) 2020-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -17,7 +17,9 @@
 import os
 import re
 import unittest
+
 from glob import glob
+from json import loads
 
 from netifaces import AF_INET
 from netifaces import AF_INET6
@@ -27,9 +29,9 @@ from base_interfaces_test import BasicInterfaceTest
 from vyos.configsession import ConfigSessionError
 from vyos.ifconfig import Section
 from vyos.pki import CERT_BEGIN
-from vyos.template import is_ipv6
 from vyos.utils.process import cmd
 from vyos.utils.process import process_named_running
+from vyos.utils.process import popen
 from vyos.utils.file import read_file
 from vyos.utils.network import is_ipv6_link_local
 
@@ -141,15 +143,18 @@ class EthernetInterfaceTest(BasicInterfaceTest.TestCase):
 
         # Verify that no address remains on the system as this is an eternal
         # interface.
-        for intf in self._interfaces:
-            self.assertNotIn(AF_INET, ifaddresses(intf))
+        for interface in self._interfaces:
+            self.assertNotIn(AF_INET, ifaddresses(interface))
             # required for IPv6 link-local address
-            self.assertIn(AF_INET6, ifaddresses(intf))
-            for addr in ifaddresses(intf)[AF_INET6]:
+            self.assertIn(AF_INET6, ifaddresses(interface))
+            for addr in ifaddresses(interface)[AF_INET6]:
                 # checking link local addresses makes no sense
                 if is_ipv6_link_local(addr['addr']):
                     continue
-                self.assertFalse(is_intf_addr_assigned(intf, addr['addr']))
+                self.assertFalse(is_intf_addr_assigned(interface, addr['addr']))
+            # Ensure no VLAN interfaces are left behind
+            tmp = [x for x in Section.interfaces('ethernet') if x.startswith(f'{interface}.')]
+            self.assertListEqual(tmp, [])
 
     def test_offloading_rps(self):
         # enable RPS on all available CPUs, RPS works with a CPU bitmask,
@@ -297,6 +302,67 @@ class EthernetInterfaceTest(BasicInterfaceTest.TestCase):
         for name in ca_certs:
             self.cli_delete(['pki', 'ca', name])
         self.cli_delete(['pki', 'certificate', cert_name])
+
+    def test_ethtool_ring_buffer(self):
+        for interface in self._interfaces:
+            # We do not use vyos.ethtool here to not have any chance
+            # for invalid testcases. Re-gain data by hand
+            tmp = cmd(f'sudo ethtool --json --show-ring {interface}')
+            tmp = loads(tmp)
+            max_rx = str(tmp[0]['rx-max'])
+            max_tx = str(tmp[0]['tx-max'])
+
+            self.cli_set(self._base_path + [interface, 'ring-buffer', 'rx', max_rx])
+            self.cli_set(self._base_path + [interface, 'ring-buffer', 'tx', max_tx])
+
+        self.cli_commit()
+
+        for interface in self._interfaces:
+            tmp = cmd(f'sudo ethtool --json --show-ring {interface}')
+            tmp = loads(tmp)
+            max_rx = str(tmp[0]['rx-max'])
+            max_tx = str(tmp[0]['tx-max'])
+            rx = str(tmp[0]['rx'])
+            tx = str(tmp[0]['tx'])
+
+            # validate if the above change was carried out properly and the
+            # ring-buffer size got increased
+            self.assertEqual(max_rx, rx)
+            self.assertEqual(max_tx, tx)
+
+    def test_ethtool_flow_control(self):
+        for interface in self._interfaces:
+            # Disable flow-control
+            self.cli_set(self._base_path + [interface, 'disable-flow-control'])
+            # Check current flow-control state on ethernet interface
+            out, err = popen(f'sudo ethtool --json --show-pause {interface}')
+            # Flow-control not supported - test if it bails out with a proper
+            # this is a dynamic path where err = 1 on VMware, but err = 0 on
+            # a physical box.
+            if bool(err):
+                with self.assertRaises(ConfigSessionError):
+                    self.cli_commit()
+            else:
+                out = loads(out)
+                # Flow control is on
+                self.assertTrue(out[0]['autonegotiate'])
+
+                # commit change on CLI to disable-flow-control and re-test
+                self.cli_commit()
+
+                out, err = popen(f'sudo ethtool --json --show-pause {interface}')
+                out = loads(out)
+                self.assertFalse(out[0]['autonegotiate'])
+
+    def test_ethtool_evpn_uplink_tarcking(self):
+        for interface in self._interfaces:
+            self.cli_set(self._base_path + [interface, 'evpn', 'uplink'])
+
+        self.cli_commit()
+
+        for interface in self._interfaces:
+            frrconfig = self.getFRRconfig(f'interface {interface}', daemon='zebra')
+            self.assertIn(f' evpn mh uplink', frrconfig)
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

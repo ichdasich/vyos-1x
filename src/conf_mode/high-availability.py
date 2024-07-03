@@ -86,16 +86,7 @@ def verify(ha):
                     raise ConfigError(f'Authentication requires both type and passwortd to be set in VRRP group "{group}"')
 
             if 'health_check' in group_config:
-                health_check_types = ["script", "ping"]
-                from vyos.utils.dict import check_mutually_exclusive_options
-                try:
-                    check_mutually_exclusive_options(group_config["health_check"], health_check_types, required=True)
-                except ValueError:
-                    Warning(f'Health check configuration for VRRP group "{group}" will remain unused ' \
-                            f'until it has one of the following options: {health_check_types}')
-                    # XXX: health check has default options so we need to remove it
-                    # to avoid generating useless config statements in keepalived.conf
-                    del group_config["health_check"]
+                _validate_health_check(group, group_config)
 
             # Keepalived doesn't allow mixing IPv4 and IPv6 in one group, so we mirror that restriction
             # We also need to make sure VRID is not used twice on the same interface with the
@@ -125,8 +116,9 @@ def verify(ha):
                         raise ConfigError(f'VRRP group "{group}" uses IPv4 but hello-source-address is IPv6!')
 
                 if 'peer_address' in group_config:
-                    if is_ipv6(group_config['peer_address']):
-                        raise ConfigError(f'VRRP group "{group}" uses IPv4 but peer-address is IPv6!')
+                    for peer_address in group_config['peer_address']:
+                        if is_ipv6(peer_address):
+                            raise ConfigError(f'VRRP group "{group}" uses IPv4 but peer-address is IPv6!')
 
             if vaddrs6:
                 tmp = {'interface': interface, 'vrid': vrid, 'ipver': 'IPv6'}
@@ -139,16 +131,28 @@ def verify(ha):
                         raise ConfigError(f'VRRP group "{group}" uses IPv6 but hello-source-address is IPv4!')
 
                 if 'peer_address' in group_config:
-                    if is_ipv4(group_config['peer_address']):
-                        raise ConfigError(f'VRRP group "{group}" uses IPv6 but peer-address is IPv4!')
+                    for peer_address in group_config['peer_address']:
+                        if is_ipv4(peer_address):
+                            raise ConfigError(f'VRRP group "{group}" uses IPv6 but peer-address is IPv4!')
     # Check sync groups
     if 'vrrp' in ha and 'sync_group' in ha['vrrp']:
         for sync_group, sync_config in ha['vrrp']['sync_group'].items():
+            if 'health_check' in sync_config:
+                _validate_health_check(sync_group, sync_config)
+
             if 'member' in sync_config:
                 for member in sync_config['member']:
                     if member not in ha['vrrp']['group']:
                         raise ConfigError(f'VRRP sync-group "{sync_group}" refers to VRRP group "{member}", '\
                                           'but it does not exist!')
+                    else:
+                        ha['vrrp']['group'][member]['_is_sync_group_member'] = True
+                        if ha['vrrp']['group'][member].get('health_check') is not None:
+                            raise ConfigError(
+                                f'Health check configuration for VRRP group "{member}" will remain unused '
+                                f'while it has member of sync group "{sync_group}" '
+                                f'Only sync group health check will be used'
+                            )
 
     # Virtual-server
     if 'virtual_server' in ha:
@@ -168,6 +172,21 @@ def verify(ha):
         for rs, rs_config in vs_config['real_server'].items():
             if 'port' not in rs_config:
                 raise ConfigError(f'Port is required but not set for virtual-server "{vs}" real-server "{rs}"')
+
+
+def _validate_health_check(group, group_config):
+    health_check_types = ["script", "ping"]
+    from vyos.utils.dict import check_mutually_exclusive_options
+    try:
+        check_mutually_exclusive_options(group_config["health_check"],
+                                         health_check_types, required=True)
+    except ValueError:
+        Warning(
+            f'Health check configuration for VRRP group "{group}" will remain unused ' \
+            f'until it has one of the following options: {health_check_types}')
+        # XXX: health check has default options so we need to remove it
+        # to avoid generating useless config statements in keepalived.conf
+        del group_config["health_check"]
 
 
 def generate(ha):

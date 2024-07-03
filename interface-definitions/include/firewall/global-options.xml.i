@@ -44,6 +44,26 @@
       </properties>
       <defaultValue>disable</defaultValue>
     </leafNode>
+    <leafNode name="directed-broadcast">
+      <properties>
+        <help>Policy for handling IPv4 directed broadcast forwarding on all interfaces</help>
+        <completionHelp>
+          <list>enable disable</list>
+        </completionHelp>
+        <valueHelp>
+          <format>enable</format>
+          <description>Enable IPv4 directed broadcast forwarding on all interfaces</description>
+        </valueHelp>
+        <valueHelp>
+          <format>disable</format>
+          <description>Disable IPv4 directed broadcast forwarding on all interfaces</description>
+        </valueHelp>
+        <constraint>
+          <regex>(enable|disable)</regex>
+        </constraint>
+      </properties>
+      <defaultValue>enable</defaultValue>
+    </leafNode>
     <leafNode name="ip-src-route">
       <properties>
         <help>Policy for handling IPv4 packets with source route option</help>
@@ -167,6 +187,43 @@
       </properties>
       <defaultValue>disable</defaultValue>
     </leafNode>
+    <node name="state-policy">
+      <properties>
+        <help>Global firewall state-policy</help>
+      </properties>
+      <children>
+        <node name="established">
+          <properties>
+            <help>Global firewall policy for packets part of an established connection</help>
+          </properties>
+          <children>
+            #include <include/firewall/action-accept-drop-reject.xml.i>
+            #include <include/firewall/log.xml.i>
+            #include <include/firewall/rule-log-level.xml.i>
+          </children>
+        </node>
+        <node name="invalid">
+          <properties>
+            <help>Global firewall policy for packets part of an invalid connection</help>
+          </properties>
+          <children>
+            #include <include/firewall/action-accept-drop-reject.xml.i>
+            #include <include/firewall/log.xml.i>
+            #include <include/firewall/rule-log-level.xml.i>
+          </children>
+        </node>
+        <node name="related">
+          <properties>
+            <help>Global firewall policy for packets part of a related connection</help>
+          </properties>
+          <children>
+            #include <include/firewall/action-accept-drop-reject.xml.i>
+            #include <include/firewall/log.xml.i>
+            #include <include/firewall/rule-log-level.xml.i>
+          </children>
+        </node>
+      </children>
+    </node>
     <leafNode name="syn-cookies">
       <properties>
         <help>Policy for using TCP SYN cookies with IPv4</help>
@@ -187,6 +244,14 @@
       </properties>
       <defaultValue>enable</defaultValue>
     </leafNode>
+    <node name="timeout">
+      <properties>
+        <help>Connection timeout options</help>
+      </properties>
+      <children>
+        #include <include/firewall/timeout-common-protocols.xml.i>
+      </children>
+    </node>
     <leafNode name="twa-hazards-protection">
       <properties>
         <help>RFC1337 TCP TIME-WAIT assasination hazards protection</help>

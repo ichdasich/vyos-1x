@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2019-2021 VyOS maintainers and contributors
+# Copyright (C) 2019-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -13,8 +13,6 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-import os
 
 from vyos.config import Config
 from vyos.configverify import verify_vrf
@@ -51,7 +49,7 @@ def verify(bfd):
         for peer, peer_config in bfd['peer'].items():
             # IPv6 link local peers require an explicit local address/interface
             if is_ipv6_link_local(peer):
-                if 'source' not in peer_config or len(peer_config['source'] < 2):
+                if 'source' not in peer_config or len(peer_config['source']) < 2:
                     raise ConfigError('BFD IPv6 link-local peers require explicit local address and interface setting')
 
             # IPv6 peers require an explicit local address
@@ -71,6 +69,9 @@ def verify(bfd):
                 # multihop doesn't accept interface names
                 if 'source' in peer_config and 'interface' in peer_config['source']:
                     raise ConfigError('BFD multihop and source interface cannot be used together')
+
+            if 'minimum_ttl' in peer_config and 'multihop' not in peer_config:
+                raise ConfigError('Minimum TTL is only available for multihop BFD sessions!')
 
             if 'profile' in peer_config:
                 profile_name = peer_config['profile']

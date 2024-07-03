@@ -10,7 +10,7 @@
       </properties>
       <children>
         #include <include/firewall/default-action-base-chains.xml.i>
-        #include <include/firewall/enable-default-log.xml.i>
+        #include <include/firewall/default-log.xml.i>
         #include <include/generic-description.xml.i>
         <tagNode name="rule">
           <properties>
@@ -28,6 +28,7 @@
             #include <include/firewall/action-forward.xml.i>
             #include <include/firewall/common-rule-ipv4.xml.i>
             #include <include/firewall/inbound-interface.xml.i>
+            #include <include/firewall/match-ipsec.xml.i>
             #include <include/firewall/offload-target.xml.i>
             #include <include/firewall/outbound-interface.xml.i>
           </children>

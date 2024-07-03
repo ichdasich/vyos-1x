@@ -159,7 +159,9 @@ def is_wwan_connected(interface):
     """ Determine if a given WWAN interface, e.g. wwan0 is connected to the
     carrier network or not """
     import json
+    from vyos.utils.dict import dict_search
     from vyos.utils.process import cmd
+    from vyos.utils.process import is_systemd_service_active
 
     if not interface.startswith('wwan'):
         raise ValueError(f'Specified interface "{interface}" is not a WWAN interface')
@@ -201,6 +203,7 @@ def get_all_vrfs():
     return data
 
 def interface_list() -> list:
+    from vyos.ifconfig import Section
     """
     Get list of interfaces in system
     :rtype: list
@@ -307,7 +310,7 @@ def is_ipv6_link_local(addr):
 
     return False
 
-def is_addr_assigned(ip_address, vrf=None) -> bool:
+def is_addr_assigned(ip_address, vrf=None, return_ifname=False, include_vrf=False) -> bool | str:
     """ Verify if the given IPv4/IPv6 address is assigned to any interface """
     from netifaces import interfaces
     from vyos.utils.network import get_interface_config
@@ -318,11 +321,11 @@ def is_addr_assigned(ip_address, vrf=None) -> bool:
         # case there is no need to proceed with this data set - continue loop
         # with next element
         tmp = get_interface_config(interface)
-        if dict_search('master', tmp) != vrf:
+        if dict_search('master', tmp) != vrf and not include_vrf:
             continue
 
         if is_intf_addr_assigned(interface, ip_address):
-            return True
+            return interface if return_ifname else True
 
     return False
 
@@ -519,3 +522,37 @@ def get_vxlan_vni_filter(interface: str) -> list:
             os_configured_vnis.append(str(vniStart))
 
     return os_configured_vnis
+
+# Calculate prefix length of an IPv6 range, where possible
+# Python-ified from source: https://gitlab.isc.org/isc-projects/dhcp/-/blob/master/keama/confparse.c#L4591
+def ipv6_prefix_length(low, high):
+    import socket
+
+    bytemasks = [0x80, 0xc0, 0xe0, 0xf0, 0xf8, 0xfc, 0xfe, 0xff]
+
+    try:
+        lo = bytearray(socket.inet_pton(socket.AF_INET6, low))
+        hi = bytearray(socket.inet_pton(socket.AF_INET6, high))
+    except:
+        return None
+
+    xor = bytearray(a ^ b for a, b in zip(lo, hi))
+        
+    plen = 0
+    while plen < 128 and xor[plen // 8] == 0:
+        plen += 8
+        
+    if plen == 128:
+        return plen
+    
+    for i in range((plen // 8) + 1, 16):
+        if xor[i] != 0:
+            return None
+    
+    for i in range(8):
+        msk = ~xor[plen // 8] & 0xff
+        
+        if msk == bytemasks[i]:
+            return plen + i + 1
+
+    return None

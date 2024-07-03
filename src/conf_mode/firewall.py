@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2021-2023 VyOS maintainers and contributors
+# Copyright (C) 2021-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -17,13 +17,11 @@
 import os
 import re
 
-from glob import glob
-from json import loads
 from sys import exit
 
 from vyos.base import Warning
 from vyos.config import Config
-from vyos.configdict import node_changed
+from vyos.configdict import is_node_changed
 from vyos.configdiff import get_config_diff, Diff
 from vyos.configdep import set_dependents, call_dependents
 from vyos.configverify import verify_interface_exists
@@ -31,34 +29,18 @@ from vyos.ethtool import Ethtool
 from vyos.firewall import fqdn_config_parse
 from vyos.firewall import geoip_update
 from vyos.template import render
-from vyos.utils.process import call
-from vyos.utils.process import cmd
 from vyos.utils.dict import dict_search_args
 from vyos.utils.dict import dict_search_recursive
-from vyos.utils.process import process_named_running
+from vyos.utils.process import call
+from vyos.utils.process import cmd
 from vyos.utils.process import rc_cmd
 from vyos import ConfigError
 from vyos import airbag
 
 airbag.enable()
 
-nat_conf_script = 'nat.py'
-policy_route_conf_script = 'policy-route.py'
-
 nftables_conf = '/run/nftables.conf'
-
-sysfs_config = {
-    'all_ping': {'sysfs': '/proc/sys/net/ipv4/icmp_echo_ignore_all', 'enable': '0', 'disable': '1'},
-    'broadcast_ping': {'sysfs': '/proc/sys/net/ipv4/icmp_echo_ignore_broadcasts', 'enable': '0', 'disable': '1'},
-    'ip_src_route': {'sysfs': '/proc/sys/net/ipv4/conf/*/accept_source_route'},
-    'ipv6_receive_redirects': {'sysfs': '/proc/sys/net/ipv6/conf/*/accept_redirects'},
-    'ipv6_src_route': {'sysfs': '/proc/sys/net/ipv6/conf/*/accept_source_route', 'enable': '0', 'disable': '-1'},
-    'log_martians': {'sysfs': '/proc/sys/net/ipv4/conf/all/log_martians'},
-    'receive_redirects': {'sysfs': '/proc/sys/net/ipv4/conf/*/accept_redirects'},
-    'send_redirects': {'sysfs': '/proc/sys/net/ipv4/conf/*/send_redirects'},
-    'syn_cookies': {'sysfs': '/proc/sys/net/ipv4/tcp_syncookies'},
-    'twa_hazards_protection': {'sysfs': '/proc/sys/net/ipv4/tcp_rfc1337'}
-}
+sysctl_file = r'/run/sysctl/10-vyos-firewall.conf'
 
 valid_groups = [
     'address_group',
@@ -133,7 +115,7 @@ def get_config(config=None):
                                     with_recursive_defaults=True)
 
 
-    firewall['group_resync'] = bool('group' in firewall or node_changed(conf, base + ['group']))
+    firewall['group_resync'] = bool('group' in firewall or is_node_changed(conf, base + ['group']))
     if firewall['group_resync']:
         # Update nat and policy-route as firewall groups were updated
         set_dependents('group_resync', conf)
@@ -271,6 +253,18 @@ def verify_rule(firewall, rule_conf, ipv6):
             if 'port' in side_conf and dict_search_args(side_conf, 'group', 'port_group'):
                 raise ConfigError(f'{side} port-group and port cannot both be defined')
 
+    if 'add_address_to_group' in rule_conf:
+        for type in ['destination_address', 'source_address']:
+            if type in rule_conf['add_address_to_group']:
+                if 'address_group' not in rule_conf['add_address_to_group'][type]:
+                    raise ConfigError(f'Dynamic address group must be defined.')
+                else:
+                    target = rule_conf['add_address_to_group'][type]['address_group']
+                    fwall_group = 'ipv6_address_group' if ipv6 else 'address_group'
+                    group_obj = dict_search_args(firewall, 'group', 'dynamic_group', fwall_group, target)
+                    if group_obj is None:
+                            raise ConfigError(f'Invalid dynamic address group on firewall rule')
+
     if 'log_options' in rule_conf:
         if 'log' not in rule_conf:
             raise ConfigError('log-options defined, but log is not enable')
@@ -285,6 +279,15 @@ def verify_rule(firewall, rule_conf, ipv6):
         if direction in rule_conf:
             if 'name' in rule_conf[direction] and 'group' in rule_conf[direction]:
                 raise ConfigError(f'Cannot specify both interface group and interface name for {direction}')
+            if 'group' in rule_conf[direction]:
+                group_name = rule_conf[direction]['group']
+                if group_name[0] == '!':
+                    group_name = group_name[1:]
+                group_obj = dict_search_args(firewall, 'group', 'interface_group', group_name)
+                if group_obj is None:
+                    raise ConfigError(f'Invalid interface group "{group_name}" on firewall rule')
+                if not group_obj:
+                    Warning(f'interface-group "{group_name}" has no members!')
 
 def verify_nested_group(group_name, group, groups, seen):
     if 'include' not in group:
@@ -335,7 +338,7 @@ def verify(firewall):
                     verify_nested_group(group_name, group, groups, [])
 
     if 'ipv4' in firewall:
-        for name in ['name','forward','input','output']:
+        for name in ['name','forward','input','output', 'prerouting']:
             if name in firewall['ipv4']:
                 for name_id, name_conf in firewall['ipv4'][name].items():
                     if 'jump' in name_conf['default_action'] and 'default_jump_target' not in name_conf:
@@ -355,7 +358,7 @@ def verify(firewall):
                             verify_rule(firewall, rule_conf, False)
 
     if 'ipv6' in firewall:
-        for name in ['name','forward','input','output']:
+        for name in ['name','forward','input','output', 'prerouting']:
             if name in firewall['ipv6']:
                 for name_id, name_conf in firewall['ipv6'][name].items():
                     if 'jump' in name_conf['default_action'] and 'default_jump_target' not in name_conf:
@@ -451,33 +454,16 @@ def generate(firewall):
                     local_zone_conf['from_local'][zone] = zone_conf['from'][local_zone]
 
     render(nftables_conf, 'firewall/nftables.j2', firewall)
+    render(sysctl_file, 'firewall/sysctl-firewall.conf.j2', firewall)
     return None
 
-def apply_sysfs(firewall):
-    for name, conf in sysfs_config.items():
-        paths = glob(conf['sysfs'])
-        value = None
-
-        if name in firewall['global_options']:
-            conf_value = firewall['global_options'][name]
-            if conf_value in conf:
-                value = conf[conf_value]
-            elif conf_value == 'enable':
-                value = '1'
-            elif conf_value == 'disable':
-                value = '0'
-
-        if value:
-            for path in paths:
-                with open(path, 'w') as f:
-                    f.write(value)
-
 def apply(firewall):
-    install_result, output = rc_cmd(f'nft -f {nftables_conf}')
+    install_result, output = rc_cmd(f'nft --file {nftables_conf}')
     if install_result == 1:
         raise ConfigError(f'Failed to apply firewall: {output}')
 
-    apply_sysfs(firewall)
+    # Apply firewall global-options sysctl settings
+    cmd(f'sysctl -f {sysctl_file}')
 
     call_dependents()
 

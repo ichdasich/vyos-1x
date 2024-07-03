@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2023 VyOS maintainers and contributors
+# Copyright (C) 2023-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -14,15 +14,15 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-import os
-
 from sys import exit
 from netifaces import interfaces
 
 from vyos.base import Warning
 from vyos.config import Config
-from vyos.configdep import set_dependents, call_dependents
+from vyos.configdep import set_dependents
+from vyos.configdep import call_dependents
 from vyos.configdict import dict_merge
+from vyos.configverify import verify_interface_exists
 from vyos.ifconfig import Section
 from vyos.qos import CAKE
 from vyos.qos import DropTail
@@ -36,10 +36,13 @@ from vyos.qos import RateLimiter
 from vyos.qos import RoundRobin
 from vyos.qos import TrafficShaper
 from vyos.qos import TrafficShaperHFSC
-from vyos.utils.process import call
 from vyos.utils.dict import dict_search_recursive
+from vyos.utils.process import run
 from vyos import ConfigError
 from vyos import airbag
+from vyos.xml_ref import relative_defaults
+
+
 airbag.enable()
 
 map_vyops_tc = {
@@ -71,6 +74,52 @@ def get_shaper(qos, interface_config, direction):
 
     return (map_vyops_tc[shaper_type], shaper_config)
 
+
+def _clean_conf_dict(conf):
+    """
+    Delete empty nodes from config e.g.
+        match ADDRESS30 {
+            ip {
+                source {}
+            }
+        }
+    """
+    if isinstance(conf, dict):
+        return {node: _clean_conf_dict(val) for node, val in conf.items() if val != {} and _clean_conf_dict(val) != {}}
+    else:
+        return conf
+
+
+def _get_group_filters(config: dict, group_name: str, visited=None) -> dict:
+    filters = dict()
+    if not visited:
+        visited = [group_name, ]
+    else:
+        if group_name in visited:
+            return filters
+        visited.append(group_name)
+
+    for filter, filter_config in config.get(group_name, {}).items():
+        if filter == 'match':
+            for match, match_config in filter_config.items():
+               filters[f'{group_name}-{match}'] = match_config
+        elif filter == 'match_group':
+            for group in filter_config:
+                filters.update(_get_group_filters(config, group, visited))
+
+    return filters
+
+
+def _get_group_match(config:dict, group_name:str) -> dict:
+    match = dict()
+    for key, val in _get_group_filters(config, group_name).items():
+        # delete duplicate matches
+        if val not in match.values():
+            match[key] = val
+
+    return match
+
+
 def get_config(config=None):
     if config:
         conf = config
@@ -100,29 +149,66 @@ def get_config(config=None):
             for rd_name in list(qos['policy'][policy]):
                 # There are eight precedence levels - ensure all are present
                 # to be filled later down with the appropriate default values
-                default_precedence = {'precedence' : { '0' : {}, '1' : {}, '2' : {}, '3' : {},
-                                                       '4' : {}, '5' : {}, '6' : {}, '7' : {} }}
+                default_p_val = relative_defaults(
+                    ['qos', 'policy', 'random-detect', rd_name, 'precedence'],
+                    {'precedence': {'0': {}}},
+                    get_first_key=True, recursive=True
+                )['0']
+                default_p_val = {key.replace('-', '_'): value for key, value in default_p_val.items()}
+                default_precedence = {
+                    'precedence': {'0': default_p_val, '1': default_p_val,
+                                   '2': default_p_val, '3': default_p_val,
+                                   '4': default_p_val, '5': default_p_val,
+                                   '6': default_p_val, '7': default_p_val}}
+
                 qos['policy']['random_detect'][rd_name] = dict_merge(
                     default_precedence, qos['policy']['random_detect'][rd_name])
 
     qos = conf.merge_defaults(qos, recursive=True)
 
+    if 'traffic_match_group' in qos:
+        for group, group_config in qos['traffic_match_group'].items():
+            if 'match_group' in group_config:
+                qos['traffic_match_group'][group]['match'] = _get_group_match(qos['traffic_match_group'], group)
+
     for policy in qos.get('policy', []):
         for p_name, p_config in qos['policy'][policy].items():
-            if 'precedence' in p_config:
-                # precedence settings are a bit more complex as they are
-                # calculated under specific circumstances:
-                for precedence in p_config['precedence']:
-                    max_thr = int(qos['policy'][policy][p_name]['precedence'][precedence]['maximum_threshold'])
-                    if 'minimum_threshold' not in qos['policy'][policy][p_name]['precedence'][precedence]:
-                        qos['policy'][policy][p_name]['precedence'][precedence]['minimum_threshold'] = str(
-                            int((9 + int(precedence)) * max_thr) // 18);
+            # cleanup empty match config
+            if 'class' in p_config:
+                for cls, cls_config in p_config['class'].items():
+                    if 'match_group' in cls_config:
+                        # merge group match to match
+                        for group in cls_config['match_group']:
+                            for match, match_conf in qos['traffic_match_group'].get(group, {'match': {}})['match'].items():
+                                if 'match' not in cls_config:
+                                    cls_config['match'] = dict()
+                                if match in cls_config['match']:
+                                    cls_config['match'][f'{group}-{match}'] = match_conf
+                                else:
+                                    cls_config['match'][match] = match_conf
 
-                    if 'queue_limit' not in qos['policy'][policy][p_name]['precedence'][precedence]:
-                        qos['policy'][policy][p_name]['precedence'][precedence]['queue_limit'] = \
-                            str(int(4 * max_thr))
+                    if 'match' in cls_config:
+                        cls_config['match'] = _clean_conf_dict(cls_config['match'])
+                        if cls_config['match'] == {}:
+                            del cls_config['match']
 
     return qos
+
+
+def _verify_match(cls_config: dict) -> None:
+    if 'match' in cls_config:
+        for match, match_config in cls_config['match'].items():
+            if {'ip', 'ipv6'} <= set(match_config):
+                raise ConfigError(
+                    f'Can not use both IPv6 and IPv4 in one match ({match})!')
+
+
+def _verify_match_group_exist(cls_config, qos):
+    if 'match_group' in cls_config:
+        for group in cls_config['match_group']:
+            if 'traffic_match_group' not in qos or group not in qos['traffic_match_group']:
+                Warning(f'Match group "{group}" does not exist!')
+
 
 def verify(qos):
     if not qos or 'interface' not in qos:
@@ -149,13 +235,10 @@ def verify(qos):
                 if 'class' in policy_config:
                     for cls, cls_config in policy_config['class'].items():
                         # bandwidth is not mandatory for priority-queue - that is why this is on the exception list
-                        if 'bandwidth' not in cls_config and policy_type not in ['priority_queue', 'round_robin']:
+                        if 'bandwidth' not in cls_config and policy_type not in ['priority_queue', 'round_robin', 'shaper_hfsc']:
                             raise ConfigError(f'Bandwidth must be defined for policy "{policy}" class "{cls}"!')
-                    if 'match' in cls_config:
-                        for match, match_config in cls_config['match'].items():
-                            if {'ip', 'ipv6'} <= set(match_config):
-                                 raise ConfigError(f'Can not use both IPv6 and IPv4 in one match ({match})!')
-
+                        _verify_match(cls_config)
+                        _verify_match_group_exist(cls_config, qos)
                 if policy_type in ['random_detect']:
                     if 'precedence' in policy_config:
                         for precedence, precedence_config in policy_config['precedence'].items():
@@ -173,7 +256,7 @@ def verify(qos):
                     if 'default' not in policy_config:
                         raise ConfigError(f'Policy {policy} misses "default" class!')
                 if 'default' in policy_config:
-                    if 'bandwidth' not in policy_config['default'] and policy_type not in ['priority_queue', 'round_robin']:
+                    if 'bandwidth' not in policy_config['default'] and policy_type not in ['priority_queue', 'round_robin', 'shaper_hfsc']:
                         raise ConfigError('Bandwidth not defined for default traffic!')
 
     # we should check interface ingress/egress configuration after verifying that
@@ -193,7 +276,13 @@ def verify(qos):
             if direction not in tmp:
                 raise ConfigError(f'Selected QoS policy on interface "{interface}" only supports "{tmp}"!')
 
+    if 'traffic_match_group' in qos:
+        for group, group_config in qos['traffic_match_group'].items():
+            _verify_match(group_config)
+            _verify_match_group_exist(group_config, qos)
+
     return None
+
 
 def generate(qos):
     if not qos or 'interface' not in qos:
@@ -205,8 +294,8 @@ def apply(qos):
     # Always delete "old" shapers first
     for interface in interfaces():
         # Ignore errors (may have no qdisc)
-        call(f'tc qdisc del dev {interface} parent ffff:')
-        call(f'tc qdisc del dev {interface} root')
+        run(f'tc qdisc del dev {interface} parent ffff:')
+        run(f'tc qdisc del dev {interface} root')
 
     call_dependents()
 
@@ -214,11 +303,10 @@ def apply(qos):
         return None
 
     for interface, interface_config in qos['interface'].items():
-        if not os.path.exists(f'/sys/class/net/{interface}'):
+        if not verify_interface_exists(interface, warning_only=True):
             # When shaper is bound to a dialup (e.g. PPPoE) interface it is
             # possible that it is yet not availbale when to QoS code runs.
-            # Skip the configuration and inform the user
-            Warning(f'Interface "{interface}" does not exist!')
+            # Skip the configuration and inform the user via warning_only=True
             continue
 
         for direction in ['egress', 'ingress']:
@@ -231,6 +319,7 @@ def apply(qos):
             tmp.update(shaper_config, direction)
 
     return None
+
 
 if __name__ == '__main__':
     try:

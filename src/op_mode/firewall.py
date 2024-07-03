@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2023 VyOS maintainers and contributors
+# Copyright (C) 2023-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -19,6 +19,7 @@ import ipaddress
 import json
 import re
 import tabulate
+import textwrap
 
 from vyos.config import Config
 from vyos.utils.process import cmd
@@ -62,10 +63,10 @@ def get_nftables_details(family, hook, priority):
         aux=''
 
     if hook == 'name' or hook == 'ipv6-name':
-        command = f'sudo nft list chain {suffix} vyos_filter {name_prefix}{priority}'
+        command = f'nft list chain {suffix} vyos_filter {name_prefix}{priority}'
     else:
         up_hook = hook.upper()
-        command = f'sudo nft list chain {suffix} vyos_filter VYOS_{aux}{up_hook}_{priority}'
+        command = f'nft list chain {suffix} vyos_filter VYOS_{aux}{up_hook}_{priority}'
 
     try:
         results = cmd(command)
@@ -89,6 +90,72 @@ def get_nftables_details(family, hook, priority):
         out[rule_id] = rule
     return out
 
+def get_nftables_state_details(family):
+    if family == 'ipv6':
+        suffix = 'ip6'
+        name_suffix = 'POLICY6'
+    elif family == 'ipv4':
+        suffix = 'ip'
+        name_suffix = 'POLICY'
+    else:
+        # no state policy for bridge
+        return {}
+
+    command = f'nft list chain {suffix} vyos_filter VYOS_STATE_{name_suffix}'
+    try:
+        results = cmd(command)
+    except:
+        return {}
+
+    out = {}
+    for line in results.split('\n'):
+        rule = {}
+        for state in ['established', 'related', 'invalid']:
+            if state in line:
+                counter_search = re.search(r'counter packets (\d+) bytes (\d+)', line)
+                if counter_search:
+                    rule['packets'] = counter_search[1]
+                    rule['bytes'] = counter_search[2]
+                rule['conditions'] = re.sub(r'(\b(counter packets \d+ bytes \d+|drop|reject|return|log)\b|comment "[\w\-]+")', '', line).strip()
+                out[state] = rule
+    return out
+
+def get_nftables_group_members(family, table, name):
+    prefix = 'ip6' if family == 'ipv6' else 'ip'
+    out = []
+
+    try:
+        results_str = cmd(f'nft -j list set {prefix} {table} {name}')
+        results = json.loads(results_str)
+    except:
+        return out
+
+    if 'nftables' not in results:
+        return out
+
+    for obj in results['nftables']:
+        if 'set' not in obj:
+            continue
+
+        set_obj = obj['set']
+
+        if 'elem' in set_obj:
+            for elem in set_obj['elem']:
+                if isinstance(elem, str):
+                    out.append(elem)
+                elif isinstance(elem, dict) and 'elem' in elem:
+                    out.append(elem['elem'])
+
+    return out
+
+def output_firewall_vertical(rules, headers, adjust=True):
+    for rule in rules:
+        adjusted_rule = rule + [""] * (len(headers) - len(rule)) if adjust else rule # account for different header length, like default-action
+        transformed_rule = [[header, textwrap.fill(adjusted_rule[i].replace('\n', ' '), 65)] for i, header in enumerate(headers) if i < len(adjusted_rule)] # create key-pair list from headers and rules lists; wrap at 100 char
+
+        print(tabulate.tabulate(transformed_rule, tablefmt="presto"))
+        print()
+
 def output_firewall_name(family, hook, priority, firewall_conf, single_rule_id=None):
     print(f'\n---------------------------------\n{family} Firewall "{hook} {priority}"\n')
 
@@ -103,7 +170,7 @@ def output_firewall_name(family, hook, priority, firewall_conf, single_rule_id=N
             if 'disable' in rule_conf:
                 continue
 
-            row = [rule_id, rule_conf['action'], rule_conf['protocol'] if 'protocol' in rule_conf else 'all']
+            row = [rule_id, textwrap.fill(rule_conf.get('description') or '', 50), rule_conf['action'], rule_conf['protocol'] if 'protocol' in rule_conf else 'all']
             if rule_id in details:
                 rule_details = details[rule_id]
                 row.append(rule_details.get('packets', 0))
@@ -115,7 +182,7 @@ def output_firewall_name(family, hook, priority, firewall_conf, single_rule_id=N
         def_action = firewall_conf['default_action'] if 'default_action' in firewall_conf else 'accept'
     else:
         def_action = firewall_conf['default_action'] if 'default_action' in firewall_conf else 'drop'
-    row = ['default', def_action, 'all']
+    row = ['default', '', def_action, 'all']
     rule_details = details['default-action']
     row.append(rule_details.get('packets', 0))
     row.append(rule_details.get('bytes', 0))
@@ -123,8 +190,45 @@ def output_firewall_name(family, hook, priority, firewall_conf, single_rule_id=N
     rows.append(row)
 
     if rows:
-        header = ['Rule', 'Action', 'Protocol', 'Packets', 'Bytes', 'Conditions']
-        print(tabulate.tabulate(rows, header) + '\n')
+        if args.rule:
+            rows.pop()
+
+        if args.detail:
+            header = ['Rule', 'Description', 'Action', 'Protocol', 'Packets', 'Bytes', 'Conditions']
+            output_firewall_vertical(rows, header)
+        else:
+            header = ['Rule', 'Action', 'Protocol', 'Packets', 'Bytes', 'Conditions']
+            for i in rows:
+                rows[rows.index(i)].pop(1)
+            print(tabulate.tabulate(rows, header) + '\n')
+
+def output_firewall_state_policy(family):
+    if family == 'bridge':
+        return {}
+    print(f'\n---------------------------------\n{family} State Policy\n')
+
+    details = get_nftables_state_details(family)
+    rows = []
+
+    for state, state_conf in details.items():
+        row = [state, state_conf['conditions']]
+        row.append(state_conf.get('packets', 0))
+        row.append(state_conf.get('bytes', 0))
+        row.append(state_conf.get('conditions'))
+        rows.append(row)
+
+    if rows:
+        if args.rule:
+            rows.pop()
+
+        if args.detail:
+            header = ['State', 'Conditions', 'Packets', 'Bytes']
+            output_firewall_vertical(rows, header)
+        else:
+            header = ['State', 'Packets', 'Bytes', 'Conditions']
+            for i in rows:
+                rows[rows.index(i)].pop(1)
+            print(tabulate.tabulate(rows, header) + '\n')
 
 def output_firewall_name_statistics(family, hook, prior, prior_conf, single_rule_id=None):
     print(f'\n---------------------------------\n{family} Firewall "{hook} {prior}"\n')
@@ -192,7 +296,7 @@ def output_firewall_name_statistics(family, hook, prior, prior_conf, single_rule
                 if not oiface:
                     oiface = 'any'
 
-            row = [rule_id]
+            row = [rule_id, textwrap.fill(rule_conf.get('description') or '', 50)]
             if rule_id in details:
                 rule_details = details[rule_id]
                 row.append(rule_details.get('packets', 0))
@@ -209,7 +313,7 @@ def output_firewall_name_statistics(family, hook, prior, prior_conf, single_rule
 
 
     if hook in ['input', 'forward', 'output']:
-        row = ['default']
+        row = ['default', '']
         rule_details = details['default-action']
         row.append(rule_details.get('packets', 0))
         row.append(rule_details.get('bytes', 0))
@@ -224,7 +328,7 @@ def output_firewall_name_statistics(family, hook, prior, prior_conf, single_rule
         rows.append(row)
 
     elif 'default_action' in prior_conf and not single_rule_id:
-        row = ['default']
+        row = ['default', '']
         if 'default-action' in details:
             rule_details = details['default-action']
             row.append(rule_details.get('packets', 0))
@@ -240,8 +344,14 @@ def output_firewall_name_statistics(family, hook, prior, prior_conf, single_rule
         rows.append(row)
 
     if rows:
-        header = ['Rule', 'Packets', 'Bytes', 'Action', 'Source', 'Destination', 'Inbound-Interface', 'Outbound-interface']
-        print(tabulate.tabulate(rows, header) + '\n')
+        if args.detail:
+            header = ['Rule', 'Description', 'Packets', 'Bytes', 'Action', 'Source', 'Destination', 'Inbound-Interface', 'Outbound-interface']
+            output_firewall_vertical(rows, header)
+        else:
+            header = ['Rule', 'Packets', 'Bytes', 'Action', 'Source', 'Destination', 'Inbound-Interface', 'Outbound-interface']
+            for i in rows:
+                rows[rows.index(i)].pop(1)
+            print(tabulate.tabulate(rows, header) + '\n')
 
 def show_firewall():
     print('Rulesets Information')
@@ -253,6 +363,10 @@ def show_firewall():
         return
 
     for family in ['ipv4', 'ipv6', 'bridge']:
+        if 'global_options' in firewall:
+            if 'state_policy' in firewall['global_options']:
+                output_firewall_state_policy(family)
+
         if family in firewall:
             for hook, hook_conf in firewall[family].items():
                 for prior, prior_conf in firewall[family][hook].items():
@@ -264,12 +378,17 @@ def show_firewall_family(family):
     conf = Config()
     firewall = get_config_node(conf)
 
-    if not firewall or family not in firewall:
+    if not firewall:
         return
 
-    for hook, hook_conf in firewall[family].items():
-        for prior, prior_conf in firewall[family][hook].items():
-            output_firewall_name(family, hook, prior, prior_conf)
+    if 'global_options' in firewall:
+        if 'state_policy' in firewall['global_options']:
+            output_firewall_state_policy(family)
+
+    if family in firewall:
+        for hook, hook_conf in firewall[family].items():
+            for prior, prior_conf in firewall[family][hook].items():
+                output_firewall_name(family, hook, prior, prior_conf)
 
 def show_firewall_name(family, hook, priority):
     print('Ruleset Information')
@@ -327,6 +446,8 @@ def show_firewall_group(name=None):
                             dest_group = dict_search_args(rule_conf, 'destination', 'group', group_type)
                             in_interface = dict_search_args(rule_conf, 'inbound_interface', 'group')
                             out_interface = dict_search_args(rule_conf, 'outbound_interface', 'group')
+                            dyn_group_source = dict_search_args(rule_conf, 'add_address_to_group', 'source_address', group_type)
+                            dyn_group_dst = dict_search_args(rule_conf, 'add_address_to_group', 'destination_address', group_type)
                             if source_group:
                                 if source_group[0] == "!":
                                     source_group = source_group[1:]
@@ -347,6 +468,14 @@ def show_firewall_group(name=None):
                                     out_interface = out_interface[1:]
                                 if group_name == out_interface:
                                     out.append(f'{item}-{name_type}-{priority}-{rule_id}')
+
+                            if dyn_group_source:
+                                if group_name == dyn_group_source:
+                                    out.append(f'{item}-{name_type}-{priority}-{rule_id}')
+                            if dyn_group_dst:
+                                if group_name == dyn_group_dst:
+                                    out.append(f'{item}-{name_type}-{priority}-{rule_id}')
+
 
             # Look references in route | route6
             for name_type in ['route', 'route6']:
@@ -419,34 +548,90 @@ def show_firewall_group(name=None):
 
         return out
 
-    header = ['Name', 'Type', 'References', 'Members']
     rows = []
+    header_tail = []
 
     for group_type, group_type_conf in firewall['group'].items():
-        for group_name, group_conf in group_type_conf.items():
-            if name and name != group_name:
-                continue
+        ##
+        if group_type != 'dynamic_group':
 
-            references = find_references(group_type, group_name)
-            row = [group_name, group_type, '\n'.join(references) or 'N/D']
-            if 'address' in group_conf:
-                row.append("\n".join(sorted(group_conf['address'])))
-            elif 'network' in group_conf:
-                row.append("\n".join(sorted(group_conf['network'], key=ipaddress.ip_network)))
-            elif 'mac_address' in group_conf:
-                row.append("\n".join(sorted(group_conf['mac_address'])))
-            elif 'port' in group_conf:
-                row.append("\n".join(sorted(group_conf['port'])))
-            elif 'interface' in group_conf:
-                row.append("\n".join(sorted(group_conf['interface'])))
-            else:
-                row.append('N/D')
-            rows.append(row)
+            for group_name, group_conf in group_type_conf.items():
+                if name and name != group_name:
+                    continue
 
+                references = find_references(group_type, group_name)
+                row = [group_name,  textwrap.fill(group_conf.get('description') or '', 50), group_type, '\n'.join(references) or 'N/D']
+                if 'address' in group_conf:
+                    row.append("\n".join(sorted(group_conf['address'])))
+                elif 'network' in group_conf:
+                    row.append("\n".join(sorted(group_conf['network'], key=ipaddress.ip_network)))
+                elif 'mac_address' in group_conf:
+                    row.append("\n".join(sorted(group_conf['mac_address'])))
+                elif 'port' in group_conf:
+                    row.append("\n".join(sorted(group_conf['port'])))
+                elif 'interface' in group_conf:
+                    row.append("\n".join(sorted(group_conf['interface'])))
+                else:
+                    row.append('N/D')
+                rows.append(row)
+
+        else:
+            if not args.detail:
+                header_tail = ['Timeout', 'Expires']
+
+            for dynamic_type in ['address_group', 'ipv6_address_group']:
+                family = 'ipv4' if dynamic_type == 'address_group' else 'ipv6'
+                prefix = 'DA_' if dynamic_type == 'address_group' else 'DA6_'
+                if dynamic_type in firewall['group']['dynamic_group']:
+                    for dynamic_name, dynamic_conf in firewall['group']['dynamic_group'][dynamic_type].items():
+                        references = find_references(dynamic_type, dynamic_name)
+                        row = [dynamic_name, textwrap.fill(dynamic_conf.get('description') or '', 50), dynamic_type + '(dynamic)', '\n'.join(references) or 'N/D']
+
+                        members = get_nftables_group_members(family, 'vyos_filter', f'{prefix}{dynamic_name}')
+
+                        if not members:
+                            if args.detail:
+                                row.append('N/D')
+                            else:
+                                row += ["N/D"] * 3
+                            rows.append(row)
+                            continue
+
+                        for idx, member in enumerate(members):
+                            if isinstance(member, str):
+                                # Only member, and no timeout:
+                                val = member
+                                timeout = "N/D"
+                                expires = "N/D"
+                            else:
+                                val = member.get('val', 'N/D')
+                                timeout = str(member.get('timeout', 'N/D'))
+                                expires = str(member.get('expires', 'N/D'))
+
+                            if args.detail:
+                                row.append(f'{val} (timeout: {timeout}, expires: {expires})')
+                                continue
+
+                            if idx > 0:
+                                row = [""] * 4
+
+                            row += [val, timeout, expires]
+                            rows.append(row)
+
+                        if args.detail:
+                            header_tail += [""] * (len(members) - 1)
+                            rows.append(row)
 
     if rows:
         print('Firewall Groups\n')
-        print(tabulate.tabulate(rows, header))
+        if args.detail:
+            header = ['Name', 'Description', 'Type', 'References', 'Members'] + header_tail
+            output_firewall_vertical(rows, header, adjust=False)
+        else:
+            header = ['Name', 'Type', 'References', 'Members'] + header_tail
+            for i in rows:
+                rows[rows.index(i)].pop(1)
+            print(tabulate.tabulate(rows, header))
 
 def show_summary():
     print('Ruleset Summary')
@@ -504,6 +689,10 @@ def show_statistics():
         return
 
     for family in ['ipv4', 'ipv6', 'bridge']:
+        if 'global_options' in firewall:
+            if 'state_policy' in firewall['global_options']:
+                output_firewall_state_policy(family)
+
         if family in firewall:
             for hook, hook_conf in firewall[family].items():
                 for prior, prior_conf in firewall[family][hook].items():
@@ -518,6 +707,7 @@ if __name__ == '__main__':
     parser.add_argument('--priority', help='Firewall priority', required=False, action='store', nargs='?', default='')
     parser.add_argument('--rule', help='Firewall Rule ID', required=False)
     parser.add_argument('--ipv6', help='IPv6 toggle', action='store_true')
+    parser.add_argument('--detail', help='Firewall view select', required=False)
 
     args = parser.parse_args()
 

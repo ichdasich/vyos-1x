@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2021 VyOS maintainers and contributors
+# Copyright (C) 2021-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -17,14 +17,11 @@
 import os
 
 from sys import exit
-from tempfile import NamedTemporaryFile
 
 from vyos.config import Config
 from vyos.configdict import node_changed
-from vyos.ifconfig import Interface
 from vyos.utils.process import call
 from vyos.utils.dict import dict_search
-from vyos.utils.network import get_interface_config
 from vyos import ConfigError
 from vyos import airbag
 airbag.enable()
@@ -77,8 +74,8 @@ def verify(netns):
     if 'netns_remove' in netns:
         for name, config in netns['netns_remove'].items():
             if 'interface' in config:
-                raise ConfigError(f'Can not remove NETNS "{name}", it still has '\
-                                  f'member interfaces!')
+                raise ConfigError(f'Can not remove network namespace "{name}", it '\
+                                  f'still has member interfaces!')
 
     if 'name' in netns:
         for name, config in netns['name'].items():
@@ -86,7 +83,6 @@ def verify(netns):
             pass
 
     return None
-
 
 def generate(netns):
     if not netns:

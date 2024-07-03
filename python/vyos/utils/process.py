@@ -204,17 +204,32 @@ def process_running(pid_file):
         pid = f.read().strip()
     return pid_exists(int(pid))
 
-def process_named_running(name, cmdline: str=None):
+def process_named_running(name: str, cmdline: str=None, timeout: int=0):
     """ Checks if process with given name is running and returns its PID.
     If Process is not running, return None
     """
     from psutil import process_iter
-    for p in process_iter(['name', 'pid', 'cmdline']):
-        if cmdline:
-            if p.info['name'] == name and cmdline in p.info['cmdline']:
+    def check_process(name, cmdline):
+        for p in process_iter(['name', 'pid', 'cmdline']):
+            if cmdline:
+                if name in p.info['name'] and cmdline in p.info['cmdline']:
+                    return p.info['pid']
+            elif name in p.info['name']:
                 return p.info['pid']
-        elif p.info['name'] == name:
-            return p.info['pid']
+        return None
+    if timeout:
+        import time
+        time_expire = time.time() + timeout
+        while True:
+            tmp = check_process(name, cmdline)
+            if not tmp:
+                if time.time() > time_expire:
+                    break
+                time.sleep(0.100) # wait 250ms
+                continue
+            return tmp
+    else:
+        return check_process(name, cmdline)
     return None
 
 def is_systemd_service_active(service):
@@ -230,3 +245,18 @@ def is_systemd_service_running(service):
     Copied from: https://unix.stackexchange.com/a/435317 """
     tmp = cmd(f'systemctl show --value -p SubState {service}')
     return bool((tmp == 'running'))
+
+def ip_cmd(args, json=True):
+    """ A helper for easily calling iproute2 commands """
+    if json:
+        from json import loads
+        res = cmd(f"ip --json {args}").strip()
+        if res:
+            return loads(res)
+        else:
+            # Many mutation commands like "ip link set"
+            # return an empty string
+            return None
+    else:
+        res = cmd(f"ip {args}")
+        return res

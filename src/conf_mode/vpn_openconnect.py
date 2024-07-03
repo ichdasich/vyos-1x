@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2018-2023 VyOS maintainers and contributors
+# Copyright (C) 2018-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -19,14 +19,19 @@ from sys import exit
 
 from vyos.base import Warning
 from vyos.config import Config
-from vyos.pki import wrap_certificate
+from vyos.configverify import verify_pki_certificate
+from vyos.configverify import verify_pki_ca_certificate
+from vyos.pki import find_chain
+from vyos.pki import encode_certificate
+from vyos.pki import load_certificate
 from vyos.pki import wrap_private_key
 from vyos.template import render
-from vyos.utils.process import call
-from vyos.utils.network import check_port_availability
-from vyos.utils.process import is_systemd_service_running
-from vyos.utils.network import is_listen_port_bind_service
 from vyos.utils.dict import dict_search
+from vyos.utils.file import write_file
+from vyos.utils.network import check_port_availability
+from vyos.utils.network import is_listen_port_bind_service
+from vyos.utils.process import call
+from vyos.utils.process import is_systemd_service_running
 from vyos import ConfigError
 from passlib.hash import sha512_crypt
 from time import sleep
@@ -56,12 +61,8 @@ def get_config(config=None):
 
     ocserv = conf.get_config_dict(base, key_mangling=('-', '_'),
                                   get_first_key=True,
-                                  with_recursive_defaults=True)
-
-    if ocserv:
-        ocserv['pki'] = conf.get_config_dict(['pki'], key_mangling=('-', '_'),
-                                             no_tag_node_value_mangle=True,
-                                             get_first_key=True)
+                                  with_recursive_defaults=True,
+                                  with_pki=True)
 
     return ocserv
 
@@ -79,7 +80,7 @@ def verify(ocserv):
     if "accounting" in ocserv:
         if "mode" in ocserv["accounting"] and "radius" in ocserv["accounting"]["mode"]:
             if not origin["accounting"]['radius']['server']:
-                raise ConfigError('Openconnect accounting mode radius requires at least one RADIUS server')
+                raise ConfigError('OpenConnect accounting mode radius requires at least one RADIUS server')
             if "authentication" not in ocserv or "mode" not in ocserv["authentication"]:
                 raise ConfigError('Accounting depends on OpenConnect authentication configuration')
             elif "radius" not in ocserv["authentication"]["mode"]:
@@ -93,12 +94,12 @@ def verify(ocserv):
                     raise ConfigError('OpenConnect authentication modes are mutually-exclusive, remove either local or radius from your configuration')
             if "radius" in ocserv["authentication"]["mode"]:
                 if not ocserv["authentication"]['radius']['server']:
-                    raise ConfigError('Openconnect authentication mode radius requires at least one RADIUS server')
+                    raise ConfigError('OpenConnect authentication mode radius requires at least one RADIUS server')
             if "local" in ocserv["authentication"]["mode"]:
-                if not ocserv["authentication"]["local_users"]:
-                    raise ConfigError('openconnect mode local required at least one user')
+                if not ocserv.get("authentication", {}).get("local_users"):
+                    raise ConfigError('OpenConnect mode local required at least one user')
                 if not ocserv["authentication"]["local_users"]["username"]:
-                    raise ConfigError('openconnect mode local required at least one user')
+                    raise ConfigError('OpenConnect mode local required at least one user')
                 else:
                     # For OTP mode: verify that each local user has an OTP key
                     if "otp" in ocserv["authentication"]["mode"]["local"]:
@@ -131,40 +132,21 @@ def verify(ocserv):
                     if 'default_config' not in ocserv["authentication"]["identity_based_config"]:
                         raise ConfigError('OpenConnect identity-based-config enabled but default-config not set')
         else:
-            raise ConfigError('openconnect authentication mode required')
+            raise ConfigError('OpenConnect authentication mode required')
     else:
-        raise ConfigError('openconnect authentication credentials required')
+        raise ConfigError('OpenConnect authentication credentials required')
 
     # Check ssl
     if 'ssl' not in ocserv:
-        raise ConfigError('openconnect ssl required')
+        raise ConfigError('SSL missing on OpenConnect config!')
 
-    if not ocserv['pki'] or 'certificate' not in ocserv['pki']:
-        raise ConfigError('PKI not configured')
+    if 'certificate' not in ocserv['ssl']:
+        raise ConfigError('SSL certificate missing on OpenConnect config!')
+    verify_pki_certificate(ocserv, ocserv['ssl']['certificate'])
 
-    ssl = ocserv['ssl']
-    if 'certificate' not in ssl:
-        raise ConfigError('openconnect ssl certificate required')
-
-    cert_name = ssl['certificate']
-
-    if cert_name not in ocserv['pki']['certificate']:
-        raise ConfigError('Invalid openconnect ssl certificate')
-
-    cert = ocserv['pki']['certificate'][cert_name]
-
-    if 'certificate' not in cert:
-        raise ConfigError('Missing certificate in PKI')
-
-    if 'private' not in cert or 'key' not in cert['private']:
-        raise ConfigError('Missing private key in PKI')
-
-    if 'ca_certificate' in ssl:
-        if 'ca' not in ocserv['pki']:
-            raise ConfigError('PKI not configured')
-
-        if ssl['ca_certificate'] not in ocserv['pki']['ca']:
-            raise ConfigError('Invalid openconnect ssl CA certificate')
+    if 'ca_certificate' in ocserv['ssl']:
+        for ca_cert in ocserv['ssl']['ca_certificate']:
+            verify_pki_ca_certificate(ocserv, ca_cert)
 
     # Check network settings
     if "network_settings" in ocserv:
@@ -176,7 +158,7 @@ def verify(ocserv):
         else:
             ocserv["network_settings"]["push_route"] = ["default"]
     else:
-        raise ConfigError('openconnect network settings required')
+        raise ConfigError('OpenConnect network settings required!')
 
 def generate(ocserv):
     if not ocserv:
@@ -241,25 +223,36 @@ def generate(ocserv):
     if "ssl" in ocserv:
         cert_file_path = os.path.join(cfg_dir, 'cert.pem')
         cert_key_path = os.path.join(cfg_dir, 'cert.key')
-        ca_cert_file_path = os.path.join(cfg_dir, 'ca.pem')
+
 
         if 'certificate' in ocserv['ssl']:
             cert_name = ocserv['ssl']['certificate']
             pki_cert = ocserv['pki']['certificate'][cert_name]
 
-            with open(cert_file_path, 'w') as f:
-                f.write(wrap_certificate(pki_cert['certificate']))
+            loaded_pki_cert = load_certificate(pki_cert['certificate'])
+            loaded_ca_certs = {load_certificate(c['certificate'])
+                for c in ocserv['pki']['ca'].values()} if 'ca' in ocserv['pki'] else {}
+
+            cert_full_chain = find_chain(loaded_pki_cert, loaded_ca_certs)
+
+            write_file(cert_file_path,
+                '\n'.join(encode_certificate(c) for c in cert_full_chain))
 
             if 'private' in pki_cert and 'key' in pki_cert['private']:
-                with open(cert_key_path, 'w') as f:
-                    f.write(wrap_private_key(pki_cert['private']['key']))
+                write_file(cert_key_path, wrap_private_key(pki_cert['private']['key']))
 
         if 'ca_certificate' in ocserv['ssl']:
-            ca_name = ocserv['ssl']['ca_certificate']
-            pki_ca_cert = ocserv['pki']['ca'][ca_name]
+            ca_cert_file_path = os.path.join(cfg_dir, 'ca.pem')
+            ca_chains = []
 
-            with open(ca_cert_file_path, 'w') as f:
-                f.write(wrap_certificate(pki_ca_cert['certificate']))
+            for ca_name in ocserv['ssl']['ca_certificate']:
+                pki_ca_cert = ocserv['pki']['ca'][ca_name]
+                loaded_ca_cert = load_certificate(pki_ca_cert['certificate'])
+                ca_full_chain = find_chain(loaded_ca_cert, loaded_ca_certs)
+                ca_chains.append(
+                    '\n'.join(encode_certificate(c) for c in ca_full_chain))
+
+            write_file(ca_cert_file_path, '\n'.join(ca_chains))
 
     # Render config
     render(ocserv_conf, 'ocserv/ocserv_config.j2', ocserv)
@@ -280,7 +273,7 @@ def apply(ocserv):
                 break
             sleep(0.250)
             if counter > 5:
-                raise ConfigError('openconnect failed to start, check the logs for details')
+                raise ConfigError('OpenConnect failed to start, check the logs for details')
                 break
             counter += 1
 

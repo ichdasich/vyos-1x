@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2022-2023 VyOS maintainers and contributors
+# Copyright (C) 2022-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -21,7 +21,6 @@ import typing
 from datetime import datetime
 from glob import glob
 from ipaddress import ip_address
-from isc_dhcp_leases import IscDhcpLeases
 from tabulate import tabulate
 
 import vyos.opmode
@@ -29,20 +28,24 @@ import vyos.opmode
 from vyos.base import Warning
 from vyos.configquery import ConfigTreeQuery
 
-from vyos.utils.dict import dict_search
-from vyos.utils.file import read_file
-from vyos.utils.process import cmd
+from vyos.kea import kea_get_active_config
+from vyos.kea import kea_get_leases
+from vyos.kea import kea_get_pool_from_subnet_id
+from vyos.kea import kea_delete_lease
 from vyos.utils.process import is_systemd_service_running
+from vyos.utils.process import call
 
 time_string = "%a %b %d %H:%M:%S %Z %Y"
 
 config = ConfigTreeQuery()
 lease_valid_states = ['all', 'active', 'free', 'expired', 'released', 'abandoned', 'reset', 'backup']
 sort_valid_inet = ['end', 'mac', 'hostname', 'ip', 'pool', 'remaining', 'start', 'state']
-sort_valid_inet6 = ['end', 'iaid_duid', 'ip', 'last_communication', 'pool', 'remaining', 'state', 'type']
+sort_valid_inet6 = ['end', 'duid', 'ip', 'last_communication', 'pool', 'remaining', 'state', 'type']
+mapping_sort_valid = ['mac', 'ip', 'pool', 'duid']
 
 ArgFamily = typing.Literal['inet', 'inet6']
 ArgState = typing.Literal['all', 'active', 'free', 'expired', 'released', 'abandoned', 'reset', 'backup']
+ArgOrigin = typing.Literal['local', 'remote']
 
 def _utc_to_local(utc_dt):
     return datetime.fromtimestamp((datetime.fromtimestamp(utc_dt) - datetime(1970, 1, 1)).total_seconds())
@@ -71,42 +74,61 @@ def _find_list_of_dict_index(lst, key='ip', value='') -> int:
     return idx
 
 
-def _get_raw_server_leases(family='inet', pool=None, sorted=None, state=[]) -> list:
+def _get_raw_server_leases(family='inet', pool=None, sorted=None, state=[], origin=None) -> list:
     """
     Get DHCP server leases
     :return list
     """
-    lease_file = '/config/dhcpdv6.leases' if family == 'inet6' else '/config/dhcpd.leases'
-    data = []
-    leases = IscDhcpLeases(lease_file).get()
+    inet_suffix = '6' if family == 'inet6' else '4'
+    try:
+        leases = kea_get_leases(inet_suffix)
+    except:
+        raise vyos.opmode.DataUnavailable('Cannot fetch DHCP server lease information')
 
     if pool is None:
         pool = _get_dhcp_pools(family=family)
     else:
         pool = [pool]
 
+    try:
+        active_config = kea_get_active_config(inet_suffix)
+    except:
+        raise vyos.opmode.DataUnavailable('Cannot fetch DHCP server configuration')
+
+    data = []
     for lease in leases:
+        lifetime = lease['valid-lft']
+        expiry = (lease['cltt'] + lifetime)
+
+        lease['start_timestamp'] = datetime.utcfromtimestamp(expiry - lifetime)
+        lease['expire_timestamp'] = datetime.utcfromtimestamp(expiry) if expiry else None
+
         data_lease = {}
-        data_lease['ip'] = lease.ip
-        data_lease['state'] = lease.binding_state
-        data_lease['pool'] = lease.sets.get('shared-networkname', '')
-        data_lease['end'] = lease.end.timestamp() if lease.end else None
+        data_lease['ip'] = lease['ip-address']
+        lease_state_long = {0: 'active', 1: 'rejected', 2: 'expired'}
+        data_lease['state'] = lease_state_long[lease['state']]
+        data_lease['pool'] = kea_get_pool_from_subnet_id(active_config, inet_suffix, lease['subnet-id']) if active_config else '-'
+        data_lease['end'] = lease['expire_timestamp'].timestamp() if lease['expire_timestamp'] else None
+        data_lease['origin'] = 'local' # TODO: Determine remote in HA
 
         if family == 'inet':
-            data_lease['mac'] = lease.ethernet
-            data_lease['start'] = lease.start.timestamp()
-            data_lease['hostname'] = lease.hostname
+            data_lease['mac'] = lease['hw-address']
+            data_lease['start'] = lease['start_timestamp'].timestamp()
+            data_lease['hostname'] = lease['hostname']
 
         if family == 'inet6':
-            data_lease['last_communication'] = lease.last_communication.timestamp()
-            data_lease['iaid_duid'] = _format_hex_string(lease.host_identifier_string)
-            lease_types_long = {'na': 'non-temporary', 'ta': 'temporary', 'pd': 'prefix delegation'}
-            data_lease['type'] = lease_types_long[lease.type]
+            data_lease['last_communication'] = lease['start_timestamp'].timestamp()
+            data_lease['duid'] = _format_hex_string(lease['duid'])
+            data_lease['type'] = lease['type']
+
+            if lease['type'] == 'IA_PD':
+                prefix_len = lease['prefix-len']
+                data_lease['ip'] += f'/{prefix_len}'
 
         data_lease['remaining'] = '-'
 
-        if lease.end:
-            data_lease['remaining'] = lease.end - datetime.utcnow()
+        if lease['valid-lft'] > 0:
+            data_lease['remaining'] = lease['expire_timestamp'] - datetime.utcnow()
 
             if data_lease['remaining'].days >= 0:
                 # substraction gives us a timedelta object which can't be formatted with strftime
@@ -115,7 +137,7 @@ def _get_raw_server_leases(family='inet', pool=None, sorted=None, state=[]) -> l
 
         # Do not add old leases
         if data_lease['remaining'] != '' and data_lease['pool'] in pool and data_lease['state'] != 'free':
-            if not state or data_lease['state'] in state:
+            if not state or state == 'all' or data_lease['state'] in state:
                 data.append(data_lease)
 
         # deduplicate
@@ -150,10 +172,11 @@ def _get_formatted_server_leases(raw_data, family='inet'):
             remain = lease.get('remaining')
             pool = lease.get('pool')
             hostname = lease.get('hostname')
-            data_entries.append([ipaddr, hw_addr, state, start, end, remain, pool, hostname])
+            origin = lease.get('origin')
+            data_entries.append([ipaddr, hw_addr, state, start, end, remain, pool, hostname, origin])
 
         headers = ['IP Address', 'MAC address', 'State', 'Lease start', 'Lease expiration', 'Remaining', 'Pool',
-                   'Hostname']
+                   'Hostname', 'Origin']
 
     if family == 'inet6':
         for lease in raw_data:
@@ -166,11 +189,11 @@ def _get_formatted_server_leases(raw_data, family='inet'):
             remain = lease.get('remaining')
             lease_type = lease.get('type')
             pool = lease.get('pool')
-            host_identifier = lease.get('iaid_duid')
+            host_identifier = lease.get('duid')
             data_entries.append([ipaddr, state, start, end, remain, lease_type, pool, host_identifier])
 
         headers = ['IPv6 address', 'State', 'Last communication', 'Lease expiration', 'Remaining', 'Type', 'Pool',
-                   'IAID_DUID']
+                   'DUID']
 
     output = tabulate(data_entries, headers, numalign='left')
     return output
@@ -188,14 +211,11 @@ def _get_pool_size(pool, family='inet'):
     size = 0
     subnets = config.list_nodes(f'{base} subnet')
     for subnet in subnets:
-        if family == 'inet6':
-            ranges = config.list_nodes(f'{base} subnet {subnet} address-range start')
-        else:
-            ranges = config.list_nodes(f'{base} subnet {subnet} range')
+        ranges = config.list_nodes(f'{base} subnet {subnet} range')
         for range in ranges:
             if family == 'inet6':
-                start = config.list_nodes(f'{base} subnet {subnet} address-range start')[0]
-                stop = config.value(f'{base} subnet {subnet} address-range start {start} stop')
+                start = config.value(f'{base} subnet {subnet} range {range} start')
+                stop = config.value(f'{base} subnet {subnet} range {range} stop')
             else:
                 start = config.value(f'{base} subnet {subnet} range {range} start')
                 stop = config.value(f'{base} subnet {subnet} range {range} stop')
@@ -238,6 +258,47 @@ def _get_formatted_pool_statistics(pool_data, family='inet'):
     output = tabulate(data_entries, headers, numalign='left')
     return output
 
+def _get_raw_server_static_mappings(family='inet', pool=None, sorted=None):
+    if pool is None:
+        pool = _get_dhcp_pools(family=family)
+    else:
+        pool = [pool]
+
+    v = 'v6' if family == 'inet6' else ''
+    mappings = []
+    for p in pool:
+        pool_config = config.get_config_dict(['service', f'dhcp{v}-server', 'shared-network-name', p],
+                                             get_first_key=True)
+        if 'subnet' in pool_config:
+            for subnet, subnet_config in pool_config['subnet'].items():
+                if 'static-mapping' in subnet_config:
+                    for name, mapping_config in subnet_config['static-mapping'].items():
+                        mapping = {'pool': p, 'subnet': subnet, 'name': name}
+                        mapping.update(mapping_config)
+                        mappings.append(mapping)
+
+    if sorted:
+        if sorted == 'ip':
+            data.sort(key = lambda x:ip_address(x['ip-address']))
+        else:
+            data.sort(key = lambda x:x[sorted])
+    return mappings
+
+def _get_formatted_server_static_mappings(raw_data, family='inet'):
+    data_entries = []
+    for entry in raw_data:
+        pool = entry.get('pool')
+        subnet = entry.get('subnet')
+        name = entry.get('name')
+        ip_addr = entry.get('ip-address', 'N/A')
+        mac_addr = entry.get('mac', 'N/A')
+        duid = entry.get('duid', 'N/A')
+        description = entry.get('description', 'N/A')
+        data_entries.append([pool, subnet, name, ip_addr, mac_addr, duid, description])
+
+    headers = ['Pool', 'Subnet', 'Name', 'IP Address', 'MAC Address', 'DUID', 'Description']
+    output = tabulate(data_entries, headers, numalign='left')
+    return output
 
 def _verify(func):
     """Decorator checks if DHCP(v6) config exists"""
@@ -255,6 +316,25 @@ def _verify(func):
         return func(*args, **kwargs)
     return _wrapper
 
+def _verify_client(func):
+    """Decorator checks if interface is configured as DHCP client"""
+    from functools import wraps
+    from vyos.ifconfig import Section
+
+    @wraps(func)
+    def _wrapper(*args, **kwargs):
+        config = ConfigTreeQuery()
+        family = kwargs.get('family')
+        v = 'v6' if family == 'inet6' else ''
+        interface = kwargs.get('interface')
+        interface_path = Section.get_config_path(interface)
+        unconf_message = f'DHCP{v} client not configured on interface {interface}!'
+
+        # Check if config does not exist
+        if not config.exists(f'interfaces {interface_path} address dhcp{v}'):
+            raise vyos.opmode.UnconfiguredSubsystem(unconf_message)
+        return func(*args, **kwargs)
+    return _wrapper
 
 @_verify
 def show_pool_statistics(raw: bool, family: ArgFamily, pool: typing.Optional[str]):
@@ -267,12 +347,12 @@ def show_pool_statistics(raw: bool, family: ArgFamily, pool: typing.Optional[str
 
 @_verify
 def show_server_leases(raw: bool, family: ArgFamily, pool: typing.Optional[str],
-                       sorted: typing.Optional[str], state: typing.Optional[ArgState]):
+                       sorted: typing.Optional[str], state: typing.Optional[ArgState],
+                       origin: typing.Optional[ArgOrigin] ):
     # if dhcp server is down, inactive leases may still be shown as active, so warn the user.
-    v = '6' if family == 'inet6' else ''
-    service_name = 'DHCPv6' if family == 'inet6' else 'DHCP'
-    if not is_systemd_service_running(f'isc-dhcp-server{v}.service'):
-        Warning(f'{service_name} server is configured but not started. Data may be stale.')
+    v = '6' if family == 'inet6' else '4'
+    if not is_systemd_service_running(f'kea-dhcp{v}-server.service'):
+        Warning('DHCP server is configured but not started. Data may be stale.')
 
     v = 'v6' if family == 'inet6' else ''
     if pool and pool not in _get_dhcp_pools(family=family):
@@ -285,12 +365,49 @@ def show_server_leases(raw: bool, family: ArgFamily, pool: typing.Optional[str],
     if sorted and sorted not in sort_valid:
         raise vyos.opmode.IncorrectValue(f'DHCP{v} sort "{sorted}" is invalid!')
 
-    lease_data = _get_raw_server_leases(family=family, pool=pool, sorted=sorted, state=state)
+    lease_data = _get_raw_server_leases(family=family, pool=pool, sorted=sorted, state=state, origin=origin)
     if raw:
         return lease_data
     else:
         return _get_formatted_server_leases(lease_data, family=family)
 
+@_verify
+def show_server_static_mappings(raw: bool, family: ArgFamily, pool: typing.Optional[str],
+                                sorted: typing.Optional[str]):
+    v = 'v6' if family == 'inet6' else ''
+    if pool and pool not in _get_dhcp_pools(family=family):
+        raise vyos.opmode.IncorrectValue(f'DHCP{v} pool "{pool}" does not exist!')
+
+    if sorted and sorted not in mapping_sort_valid:
+        raise vyos.opmode.IncorrectValue(f'DHCP{v} sort "{sorted}" is invalid!')
+
+    static_mappings = _get_raw_server_static_mappings(family=family, pool=pool, sorted=sorted)
+    if raw:
+        return static_mappings
+    else:
+        return _get_formatted_server_static_mappings(static_mappings, family=family)
+
+def _lease_valid(inet, address):
+    leases = kea_get_leases(inet)
+    for lease in leases:
+        if address == lease['ip-address']:
+            return True
+    return False
+
+@_verify
+def clear_dhcp_server_lease(family: ArgFamily, address: str):
+    v = 'v6' if family == 'inet6' else ''
+    inet = '6' if family == 'inet6' else '4'
+
+    if not _lease_valid(inet, address):
+        print(f'Lease not found on DHCP{v} server')
+        return None
+
+    if not kea_delete_lease(inet, address):
+        print(f'Failed to clear lease for "{address}"')
+        return None
+
+    print(f'Lease "{address}" has been cleared')
 
 def _get_raw_client_leases(family='inet', interface=None):
     from time import mktime
@@ -382,6 +499,26 @@ def show_client_leases(raw: bool, family: ArgFamily, interface: typing.Optional[
         return lease_data
     else:
         return _get_formatted_client_leases(lease_data, family=family)
+
+@_verify_client
+def renew_client_lease(raw: bool, family: ArgFamily, interface: str):
+    if not raw:
+        v = 'v6' if family == 'inet6' else ''
+        print(f'Restarting DHCP{v} client on interface {interface}...')
+    if family == 'inet6':
+        call(f'systemctl restart dhcp6c@{interface}.service')
+    else:
+        call(f'systemctl restart dhclient@{interface}.service')
+
+@_verify_client
+def release_client_lease(raw: bool, family: ArgFamily, interface: str):
+    if not raw:
+        v = 'v6' if family == 'inet6' else ''
+        print(f'Release DHCP{v} client on interface {interface}...')
+    if family == 'inet6':
+        call(f'systemctl stop dhcp6c@{interface}.service')
+    else:
+        call(f'systemctl stop dhclient@{interface}.service')
 
 if __name__ == '__main__':
     try:

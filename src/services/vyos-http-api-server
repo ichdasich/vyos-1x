@@ -1,6 +1,6 @@
 #!/usr/share/vyos-http-api-tools/bin/python3
 #
-# Copyright (C) 2019-2023 VyOS maintainers and contributors
+# Copyright (C) 2019-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -13,8 +13,6 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#
-#
 
 import os
 import sys
@@ -25,15 +23,17 @@ import logging
 import signal
 import traceback
 import threading
+from enum import Enum
+
 from time import sleep
-from typing import List, Union, Callable, Dict
+from typing import List, Union, Callable, Dict, Self
 
 from fastapi import FastAPI, Depends, Request, Response, HTTPException
 from fastapi import BackgroundTasks
 from fastapi.responses import HTMLResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, StrictStr, validator
+from pydantic import BaseModel, StrictStr, validator, model_validator
 from starlette.middleware.cors import CORSMiddleware
 from starlette.datastructures import FormData
 from starlette.formparsers import FormParser, MultiPartParser
@@ -46,11 +46,12 @@ from ariadne.asgi import GraphQL
 from vyos.config import Config
 from vyos.configtree import ConfigTree
 from vyos.configdiff import get_config_diff
-from vyos.configsession import ConfigSession, ConfigSessionError
+from vyos.configsession import ConfigSession
+from vyos.configsession import ConfigSessionError
+from vyos.defaults import api_config_state
 
 import api.graphql.state
 
-api_config_state = '/run/http-api-state'
 CFG_GROUP = 'vyattacfg'
 
 debug = True
@@ -140,6 +141,14 @@ class ConfigSectionModel(ApiModel, BaseConfigSectionModel):
 class ConfigSectionListModel(ApiModel):
     commands: List[BaseConfigSectionModel]
 
+class BaseConfigSectionTreeModel(BaseModel):
+    op: StrictStr
+    mask: Dict
+    config: Dict
+
+class ConfigSectionTreeModel(ApiModel, BaseConfigSectionTreeModel):
+    pass
+
 class RetrieveModel(ApiModel):
     op: StrictStr
     path: List[StrictStr]
@@ -169,16 +178,35 @@ class ConfigFileModel(ApiModel):
             }
         }
 
+
+class ImageOp(str, Enum):
+    add = "add"
+    delete = "delete"
+    show = "show"
+    set_default = "set_default"
+
+
 class ImageModel(ApiModel):
-    op: StrictStr
+    op: ImageOp
     url: StrictStr = None
     name: StrictStr = None
+
+    @model_validator(mode='after')
+    def check_data(self) -> Self:
+        if self.op == 'add':
+            if not self.url:
+                raise ValueError("Missing required field \"url\"")
+        elif self.op in ['delete', 'set_default']:
+            if not self.name:
+                raise ValueError("Missing required field \"name\"")
+
+        return self
 
     class Config:
         schema_extra = {
             "example": {
                 "key": "id_key",
-                "op": "add | delete",
+                "op": "add | delete | show | set_default",
                 "url": "imagelocation",
                 "name": "imagename",
             }
@@ -374,7 +402,7 @@ class MultipartRequest(Request):
                         self.form_err = (400,
                         f"Malformed command '{c}': missing 'op' field")
                     if endpoint not in ('/config-file', '/container-image',
-                                        '/image'):
+                                        '/image', '/configure-section'):
                         if 'path' not in c:
                             self.form_err = (400,
                             f"Malformed command '{c}': missing 'path' field")
@@ -392,12 +420,9 @@ class MultipartRequest(Request):
                             self.form_err = (400,
                             f"Malformed command '{c}': 'value' field must be a string")
                     if endpoint in ('/configure-section'):
-                        if 'section' not in c:
+                        if 'section' not in c and 'config' not in c:
                             self.form_err = (400,
-                            f"Malformed command '{c}': missing 'section' field")
-                        elif not isinstance(c['section'], dict):
-                            self.form_err = (400,
-                            f"Malformed command '{c}': 'section' field must be JSON of dict")
+                            f"Malformed command '{c}': missing 'section' or 'config' field")
 
                 if 'key' not in forms and 'key' not in merge:
                     self.form_err = (401, "Valid API key is required")
@@ -455,16 +480,16 @@ def call_commit(s: ConfigSession):
             logger.warning(f"ConfigSessionError: {e}")
 
 def _configure_op(data: Union[ConfigureModel, ConfigureListModel,
-                              ConfigSectionModel, ConfigSectionListModel],
+                              ConfigSectionModel, ConfigSectionListModel,
+                              ConfigSectionTreeModel],
                   request: Request, background_tasks: BackgroundTasks):
     session = app.state.vyos_session
     env = session.get_session_env()
-    config = Config(session_env=env)
 
     endpoint = request.url.path
 
     # Allow users to pass just one command
-    if not isinstance(data, ConfigureListModel):
+    if not isinstance(data, (ConfigureListModel, ConfigSectionListModel)):
         data = [data]
     else:
         data = data.commands
@@ -474,13 +499,16 @@ def _configure_op(data: Union[ConfigureModel, ConfigureListModel,
     # so the lock is really global
     lock.acquire()
 
+    config = Config(session_env=env)
+
     status = 200
     msg = None
     error_msg = None
     try:
         for c in data:
             op = c.op
-            path = c.path
+            if not isinstance(c, BaseConfigSectionTreeModel):
+                path = c.path
 
             if isinstance(c, BaseConfigureModel):
                 if c.value:
@@ -493,6 +521,10 @@ def _configure_op(data: Union[ConfigureModel, ConfigureListModel,
 
             elif isinstance(c, BaseConfigSectionModel):
                 section = c.section
+
+            elif isinstance(c, BaseConfigSectionTreeModel):
+                mask = c.mask
+                config = c.config
 
             if isinstance(c, BaseConfigureModel):
                 if op == 'set':
@@ -511,6 +543,14 @@ def _configure_op(data: Union[ConfigureModel, ConfigureListModel,
                     session.set_section(path, section)
                 elif op == 'load':
                     session.load_section(path, section)
+                else:
+                    raise ConfigSessionError(f"'{op}' is not a valid operation")
+
+            elif isinstance(c, BaseConfigSectionTreeModel):
+                if op == 'set':
+                    session.set_section_tree(config)
+                elif op == 'load':
+                    session.load_section_tree(mask, config)
                 else:
                     raise ConfigSessionError(f"'{op}' is not a valid operation")
         # end for
@@ -553,7 +593,8 @@ def configure_op(data: Union[ConfigureModel,
 
 @app.post('/configure-section')
 def configure_section_op(data: Union[ConfigSectionModel,
-                                     ConfigSectionListModel],
+                                     ConfigSectionListModel,
+                                     ConfigSectionTreeModel],
                                request: Request, background_tasks: BackgroundTasks):
     return _configure_op(data, request, background_tasks)
 
@@ -647,19 +688,13 @@ def image_op(data: ImageModel):
 
     try:
         if op == 'add':
-            if data.url:
-                url = data.url
-            else:
-                return error(400, "Missing required field \"url\"")
-            res = session.install_image(url)
+            res = session.install_image(data.url)
         elif op == 'delete':
-            if data.name:
-                name = data.name
-            else:
-                return error(400, "Missing required field \"name\"")
-            res = session.remove_image(name)
-        else:
-            return error(400, f"'{op}' is not a valid operation")
+            res = session.remove_image(data.name)
+        elif op == 'show':
+            res = session.show(["system", "image"])
+        elif op == 'set_default':
+            res = session.set_default_image(data.name)
     except ConfigSessionError as e:
         return error(400, str(e))
     except Exception as e:
@@ -872,13 +907,15 @@ def initialization(session: ConfigSession, app: FastAPI = app):
     global server
     try:
         server_config = load_server_config()
-        keys = flatten_keys(server_config)
     except Exception as e:
         logger.critical(f'Failed to load the HTTP API server config: {e}')
         sys.exit(1)
 
     app.state.vyos_session = session
-    app.state.vyos_keys = keys
+    app.state.vyos_keys = []
+
+    if 'keys' in server_config:
+        app.state.vyos_keys = flatten_keys(server_config)
 
     app.state.vyos_debug = bool('debug' in server_config)
     app.state.vyos_strict = bool('strict' in server_config)

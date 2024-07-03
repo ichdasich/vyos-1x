@@ -2,7 +2,7 @@
 <interfaceDefinition>
   <node name="firewall" owner="${vyos_conf_scripts_dir}/firewall.py">
     <properties>
-      <priority>199</priority>
+      <priority>319</priority>
       <help>Firewall</help>
     </properties>
     <children>
@@ -56,8 +56,9 @@
             <properties>
               <help>Firewall address-group</help>
               <constraint>
-                <regex>[a-zA-Z0-9][\w\-\.]*</regex>
+                #include <include/constraint/alpha-numeric-hyphen-underscore-dot.xml.i>
               </constraint>
+              <constraintErrorMessage>Name of firewall group can only contain alphanumeric letters, hyphen, underscores and dot</constraintErrorMessage>
             </properties>
             <children>
               <leafNode name="address">
@@ -94,9 +95,9 @@
             <properties>
               <help>Firewall domain-group</help>
               <constraint>
-                <regex>[a-zA-Z_][a-zA-Z0-9][\w\-\.]*</regex>
+                <regex>[a-zA-Z_][a-zA-Z0-9]?[\w\-\.]*</regex>
               </constraint>
-              <constraintErrorMessage>Name of domain-group can only contain alpha-numeric letters, hyphen, underscores and not start with numeric</constraintErrorMessage>
+              <constraintErrorMessage>Name of domain-group can only contain alphanumeric letters, hyphen, underscores and not start with numeric</constraintErrorMessage>
             </properties>
             <children>
               <leafNode name="address">
@@ -115,12 +116,43 @@
               #include <include/generic-description.xml.i>
             </children>
           </tagNode>
+          <node name="dynamic-group">
+            <properties>
+              <help>Firewall dynamic group</help>
+            </properties>
+            <children>
+              <tagNode name="address-group">
+                <properties>
+                  <help>Firewall dynamic address group</help>
+                  <constraint>
+                    #include <include/constraint/alpha-numeric-hyphen-underscore-dot.xml.i>
+                  </constraint>
+                  <constraintErrorMessage>Name of firewall group can only contain alphanumeric letters, hyphen, underscores and dot</constraintErrorMessage>
+                </properties>
+                <children>
+                  #include <include/generic-description.xml.i>
+                </children>
+              </tagNode>
+              <tagNode name="ipv6-address-group">
+                <properties>
+                  <help>Firewall dynamic IPv6 address group</help>
+                  <constraint>
+                    <regex>[a-zA-Z0-9][\w\-\.]*</regex>
+                  </constraint>
+                </properties>
+                <children>
+                  #include <include/generic-description.xml.i>
+                </children>
+              </tagNode>
+            </children>
+          </node>
           <tagNode name="interface-group">
             <properties>
               <help>Firewall interface-group</help>
               <constraint>
-                <regex>[a-zA-Z0-9][\w\-\.]*</regex>
+                #include <include/constraint/alpha-numeric-hyphen-underscore-dot.xml.i>
               </constraint>
+              <constraintErrorMessage>Name of firewall group can only contain alphanumeric letters, hyphen, underscores and dot</constraintErrorMessage>
             </properties>
             <children>
               <leafNode name="interface">
@@ -148,8 +180,9 @@
             <properties>
               <help>Firewall ipv6-address-group</help>
               <constraint>
-                <regex>[a-zA-Z0-9][\w\-\.]*</regex>
+                #include <include/constraint/alpha-numeric-hyphen-underscore-dot.xml.i>
               </constraint>
+              <constraintErrorMessage>Name of firewall group can only contain alphanumeric letters, hyphen, underscores and dot</constraintErrorMessage>
             </properties>
             <children>
               <leafNode name="address">
@@ -186,8 +219,9 @@
             <properties>
               <help>Firewall ipv6-network-group</help>
               <constraint>
-                <regex>[a-zA-Z0-9][\w\-\.]*</regex>
+                #include <include/constraint/alpha-numeric-hyphen-underscore-dot.xml.i>
               </constraint>
+              <constraintErrorMessage>Name of firewall group can only contain alphanumeric letters, hyphen, underscores and dot</constraintErrorMessage>
             </properties>
             <children>
               #include <include/generic-description.xml.i>
@@ -219,8 +253,9 @@
             <properties>
               <help>Firewall mac-group</help>
               <constraint>
-                <regex>[a-zA-Z0-9][\w\-\.]*</regex>
+                #include <include/constraint/alpha-numeric-hyphen-underscore-dot.xml.i>
               </constraint>
+              <constraintErrorMessage>Name of firewall group can only contain alphanumeric letters, hyphen, underscores and dot</constraintErrorMessage>
             </properties>
             <children>
               #include <include/generic-description.xml.i>
@@ -252,8 +287,9 @@
             <properties>
               <help>Firewall network-group</help>
               <constraint>
-                <regex>[a-zA-Z0-9][\w\-\.]*</regex>
+                #include <include/constraint/alpha-numeric-hyphen-underscore-dot.xml.i>
               </constraint>
+              <constraintErrorMessage>Name of firewall group can only contain alphanumeric letters, hyphen, underscores and dot</constraintErrorMessage>
             </properties>
             <children>
               #include <include/generic-description.xml.i>
@@ -285,8 +321,9 @@
             <properties>
               <help>Firewall port-group</help>
               <constraint>
-                <regex>[a-zA-Z0-9][\w\-\.]*</regex>
+                #include <include/constraint/alpha-numeric-hyphen-underscore-dot.xml.i>
               </constraint>
+              <constraintErrorMessage>Name of firewall group can only contain alphanumeric letters, hyphen, underscores and dot</constraintErrorMessage>
             </properties>
             <children>
               #include <include/generic-description.xml.i>
@@ -341,6 +378,7 @@
           #include <include/firewall/ipv4-hook-forward.xml.i>
           #include <include/firewall/ipv4-hook-input.xml.i>
           #include <include/firewall/ipv4-hook-output.xml.i>
+          #include <include/firewall/ipv4-hook-prerouting.xml.i>
           #include <include/firewall/ipv4-custom-name.xml.i>
         </children>
       </node>
@@ -352,6 +390,7 @@
           #include <include/firewall/ipv6-hook-forward.xml.i>
           #include <include/firewall/ipv6-hook-input.xml.i>
           #include <include/firewall/ipv6-hook-output.xml.i>
+          #include <include/firewall/ipv6-hook-prerouting.xml.i>
           #include <include/firewall/ipv6-custom-name.xml.i>
         </children>
       </node>
@@ -368,7 +407,7 @@
         </properties>
         <children>
           #include <include/generic-description.xml.i>
-          #include <include/firewall/enable-default-log.xml.i>
+          #include <include/firewall/default-log.xml.i>
           <leafNode name="default-action">
             <properties>
               <help>Default-action for traffic coming into this zone</help>
@@ -393,7 +432,7 @@
             <properties>
               <help>Zone from which to filter traffic</help>
               <completionHelp>
-                <path>zone-policy zone</path>
+                <path>firewall zone</path>
               </completionHelp>
             </properties>
             <children>

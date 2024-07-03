@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2019-2023 VyOS maintainers and contributors
+# Copyright (C) 2019-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -19,11 +19,15 @@ import json
 
 from requests import request
 from urllib3.exceptions import InsecureRequestWarning
+from time import sleep
 
 from base_vyostest_shim import VyOSUnitTestSHIM
 from base_vyostest_shim import ignore_warning
 from vyos.utils.file import read_file
+from vyos.utils.file import write_file
+from vyos.utils.process import call
 from vyos.utils.process import process_named_running
+from vyos.xml_ref import default_value
 
 from vyos.configsession import ConfigSessionError
 
@@ -51,6 +55,38 @@ MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgPLpD0Ohhoq0g4nhx
 u8/3jHMM7sDwL3aWzW/zp54/LhCWUoLMjDdDEEigK4fal4ZF9aA9F0Ww
 """
 
+dh_1024 = """
+MIGHAoGBAM3nvMkHGi/xmRs8cYg4pcl5sAanxel9EM+1XobVhUViXw8JvlmSEVOj
+n2aXUifc4SEs3WDzVPRC8O8qQWjvErpTq/HOgt3aqBCabMgvflmt706XP0KiqnpW
+EyvNiI27J3wBUzEXLIS110MxPAX5Tcug974PecFcOxn1RWrbWcx/AgEC
+"""
+
+dh_2048 = """
+MIIBCAKCAQEA1mld/V7WnxxRinkOlhx/BoZkRELtIUQFYxyARBqYk4C5G3YnZNNu
+zjaGyPnfIKHu8SIUH85OecM+5/co9nYlcUJuph2tbR6qNgPw7LOKIhf27u7WhvJk
+iVsJhwZiWmvvMV4jTParNEI2svoooMyhHXzeweYsg6YtgLVmwiwKj3XP3gRH2i3B
+Mq8CDS7X6xaKvjfeMPZBFqOM5nb6HhsbaAUyiZxrfipLvXxtnbzd/eJUQVfVdxM3
+pn0i+QrO2tuNAzX7GoPc9pefrbb5xJmGS50G0uqsR59+7LhYmyZSBASA0lxTEW9t
+kv/0LPvaYTY57WL7hBeqqHy/WPZHPzDI3wIBAg==
+"""
+# to test load config via HTTP URL
+nginx_tmp_site = '/etc/nginx/sites-enabled/smoketest'
+nginx_conf_smoketest = """
+server {
+    listen 8000;
+    server_name localhost;
+
+    root /tmp;
+
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+        autoindex on;
+    }
+}
+"""
+
 PROCESS_NAME = 'nginx'
 
 class TestHTTPSService(VyOSUnitTestSHIM.TestCase):
@@ -63,6 +99,11 @@ class TestHTTPSService(VyOSUnitTestSHIM.TestCase):
         cls.cli_delete(cls, base_path)
         cls.cli_delete(cls, pki_base)
 
+    @classmethod
+    def tearDownClass(cls):
+        super(TestHTTPSService, cls).tearDownClass()
+        call(f'sudo rm -f {nginx_tmp_site}')
+
     def tearDown(self):
         self.cli_delete(base_path)
         self.cli_delete(pki_base)
@@ -71,33 +112,31 @@ class TestHTTPSService(VyOSUnitTestSHIM.TestCase):
         # Check for stopped  process
         self.assertFalse(process_named_running(PROCESS_NAME))
 
-    def test_server_block(self):
-        vhost_id = 'example'
-        address = '0.0.0.0'
-        port = '8443'
-        name = 'example.org'
-
-        test_path = base_path + ['virtual-host', vhost_id]
-
-        self.cli_set(test_path + ['listen-address', address])
-        self.cli_set(test_path + ['port', port])
-        self.cli_set(test_path + ['server-name', name])
-
-        self.cli_commit()
-
-        nginx_config = read_file('/etc/nginx/sites-enabled/default')
-        self.assertIn(f'listen {address}:{port} ssl;', nginx_config)
-        self.assertIn(f'ssl_protocols TLSv1.2 TLSv1.3;', nginx_config)
-        self.assertTrue(process_named_running(PROCESS_NAME))
-
     def test_certificate(self):
-        self.cli_set(pki_base + ['certificate', 'test_https', 'certificate', cert_data.replace('\n','')])
-        self.cli_set(pki_base + ['certificate', 'test_https', 'private', 'key', key_data.replace('\n','')])
+        cert_name = 'test_https'
+        dh_name = 'dh-test'
 
-        self.cli_set(base_path + ['certificates', 'certificate', 'test_https'])
+        self.cli_set(base_path + ['certificates', 'certificate', cert_name])
+        # verify() - certificates do not exist (yet)
+        with self.assertRaises(ConfigSessionError):
+            self.cli_commit()
+        self.cli_set(pki_base + ['certificate', cert_name, 'certificate', cert_data.replace('\n','')])
+        self.cli_set(pki_base + ['certificate', cert_name, 'private', 'key', key_data.replace('\n','')])
+
+        self.cli_set(base_path + ['certificates', 'dh-params', dh_name])
+        # verify() - dh-params do not exist (yet)
+        with self.assertRaises(ConfigSessionError):
+            self.cli_commit()
+
+        self.cli_set(pki_base + ['dh', dh_name, 'parameters', dh_1024.replace('\n','')])
+        # verify() - dh-param minimum length is 2048 bit
+        with self.assertRaises(ConfigSessionError):
+            self.cli_commit()
+        self.cli_set(pki_base + ['dh', dh_name, 'parameters', dh_2048.replace('\n','')])
 
         self.cli_commit()
         self.assertTrue(process_named_running(PROCESS_NAME))
+        self.debug = False
 
     def test_api_missing_keys(self):
         self.cli_set(base_path + ['api'])
@@ -109,23 +148,19 @@ class TestHTTPSService(VyOSUnitTestSHIM.TestCase):
 
     @ignore_warning(InsecureRequestWarning)
     def test_api_auth(self):
-        vhost_id = 'example'
         address = '127.0.0.1'
-        port = '443' # default value
-        name = 'localhost'
+        port = default_value(base_path + ['port'])
 
         key = 'MySuperSecretVyOS'
         self.cli_set(base_path + ['api', 'keys', 'id', 'key-01', 'key', key])
 
-        test_path = base_path + ['virtual-host', vhost_id]
-        self.cli_set(test_path + ['listen-address', address])
-        self.cli_set(test_path + ['server-name', name])
+        self.cli_set(base_path + ['listen-address', address])
 
         self.cli_commit()
 
         nginx_config = read_file('/etc/nginx/sites-enabled/default')
         self.assertIn(f'listen {address}:{port} ssl;', nginx_config)
-        self.assertIn(f'ssl_protocols TLSv1.2 TLSv1.3;', nginx_config)
+        self.assertIn(f'ssl_protocols TLSv1.2 TLSv1.3;', nginx_config) # default
 
         url = f'https://{address}/retrieve'
         payload = {'data': '{"op": "showConfig", "path": []}', 'key': f'{key}'}
@@ -270,6 +305,7 @@ class TestHTTPSService(VyOSUnitTestSHIM.TestCase):
 
         self.cli_set(base_path + ['api', 'keys', 'id', 'key-01', 'key', key])
         self.cli_commit()
+        sleep(2)
 
         r = request('POST', url, verify=False, headers=headers, data=payload)
         # api configured; expect 200
@@ -375,6 +411,92 @@ class TestHTTPSService(VyOSUnitTestSHIM.TestCase):
         r = request('POST', url, verify=False, headers=headers, data=payload)
         self.assertEqual(r.status_code, 200)
 
+    @ignore_warning(InsecureRequestWarning)
+    def test_api_image(self):
+        address = '127.0.0.1'
+        key = 'VyOS-key'
+        url = f'https://{address}/image'
+        headers = {}
+
+        self.cli_set(base_path + ['api', 'keys', 'id', 'key-01', 'key', key])
+        self.cli_commit()
+
+        payload = {
+            'data': '{"op": "add"}',
+            'key': f'{key}',
+        }
+        r = request('POST', url, verify=False, headers=headers, data=payload)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('Missing required field "url"', r.json().get('error'))
+
+        payload = {
+            'data': '{"op": "delete"}',
+            'key': f'{key}',
+        }
+        r = request('POST', url, verify=False, headers=headers, data=payload)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('Missing required field "name"', r.json().get('error'))
+
+        payload = {
+            'data': '{"op": "set_default"}',
+            'key': f'{key}',
+        }
+        r = request('POST', url, verify=False, headers=headers, data=payload)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('Missing required field "name"', r.json().get('error'))
+
+        payload = {
+            'data': '{"op": "show"}',
+            'key': f'{key}',
+        }
+        r = request('POST', url, verify=False, headers=headers, data=payload)
+        self.assertEqual(r.status_code, 200)
+
+    @ignore_warning(InsecureRequestWarning)
+    def test_api_config_file_load_http(self):
+        # Test load config from HTTP URL
+        address = '127.0.0.1'
+        key = 'VyOS-key'
+        url = f'https://{address}/config-file'
+        url_config = f'https://{address}/configure'
+        headers = {}
+
+        self.cli_set(base_path + ['api', 'keys', 'id', 'key-01', 'key', key])
+        self.cli_commit()
+
+        # load config via HTTP requires nginx config
+        call(f'sudo touch {nginx_tmp_site}')
+        call(f'sudo chmod 666 {nginx_tmp_site}')
+        write_file(nginx_tmp_site, nginx_conf_smoketest)
+        call('sudo systemctl reload nginx')
+
+        # save config
+        payload = {
+            'data': '{"op": "save", "file": "/tmp/tmp-config.boot"}',
+            'key': f'{key}',
+        }
+        r = request('POST', url, verify=False, headers=headers, data=payload)
+        self.assertEqual(r.status_code, 200)
+
+        # change config
+        payload = {
+            'data': '{"op": "set", "path": ["interfaces", "dummy", "dum1", "address", "192.0.2.31/32"]}',
+            'key': f'{key}',
+        }
+        r = request('POST', url_config, verify=False, headers=headers, data=payload)
+        self.assertEqual(r.status_code, 200)
+
+        # load config from URL
+        payload = {
+            'data': '{"op": "load", "file": "http://localhost:8000/tmp-config.boot"}',
+            'key': f'{key}',
+        }
+        r = request('POST', url, verify=False, headers=headers, data=payload)
+        self.assertEqual(r.status_code, 200)
+
+        # cleanup tmp nginx conf
+        call(f'sudo rm -f {nginx_tmp_site}')
+        call('sudo systemctl reload nginx')
 
 if __name__ == '__main__':
     unittest.main(verbosity=5)

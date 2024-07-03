@@ -68,7 +68,8 @@ if __name__ == '__main__':
         'default': grub.gen_version_uuid(default_entry['version']),
         'bootmode': default_entry['bootmode'],
         'console_type': default_entry['console_type'],
-        'console_num': default_entry['console_num']
+        'console_num': default_entry['console_num'],
+        'console_speed': default_entry['console_speed']
     }
     vars.update(default_settings)
 
@@ -103,5 +104,9 @@ if __name__ == '__main__':
         compat.render_grub_cfg(root_dir)
     else:
         render(grub_cfg_main, grub.TMPL_GRUB_MAIN, {})
+
+    # sort inodes (to make GRUB read config files in alphabetical order)
+    grub.sort_inodes(f'{root_dir}/{grub.GRUB_DIR_VYOS}')
+    grub.sort_inodes(f'{root_dir}/{grub.GRUB_DIR_VYOS_VERS}')
 
     exit(0)

@@ -83,21 +83,34 @@ def read_json(fname, defaultonfailure=None):
             return defaultonfailure
         raise e
 
-def chown(path, user, group):
+def chown(path, user=None, group=None, recursive=False):
     """ change file/directory owner """
     from pwd import getpwnam
     from grp import getgrnam
 
-    if user is None or group is None:
+    if user is None and group is None:
         return False
 
     # path may also be an open file descriptor
     if not isinstance(path, int) and not os.path.exists(path):
         return False
 
-    uid = getpwnam(user).pw_uid
-    gid = getgrnam(group).gr_gid
-    os.chown(path, uid, gid)
+    # keep current value if not specified otherwise
+    uid = -1
+    gid = -1
+
+    if user:
+        uid = getpwnam(user).pw_uid
+    if group:
+        gid = getgrnam(group).gr_gid
+
+    if recursive:
+        for dirpath, dirnames, filenames in os.walk(path):
+            os.chown(dirpath, uid, gid)
+            for filename in filenames:
+                os.chown(os.path.join(dirpath, filename), uid, gid)
+    else:
+        os.chown(path, uid, gid)
     return True
 
 
@@ -140,6 +153,18 @@ def chmod_2775(path):
 
     bitmask = S_ISGID | S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH
     chmod(path, bitmask)
+
+def chmod_775(path):
+    """ Make file executable by all """
+    from stat import S_IRUSR, S_IWUSR, S_IXUSR, S_IRGRP, S_IWGRP, S_IXGRP, S_IROTH, S_IXOTH
+
+    bitmask = S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IWGRP | S_IXGRP | \
+              S_IROTH | S_IXOTH
+    chmod(path, bitmask)
+
+def file_permissions(path):
+    """ Return file permissions in string format, e.g '0755' """
+    return oct(os.stat(path).st_mode)[4:]
 
 def makedir(path, user=None, group=None):
     if os.path.exists(path):

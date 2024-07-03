@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2022-2023 VyOS maintainers and contributors
+# Copyright (C) 2022-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -16,7 +16,6 @@
 
 import argparse
 import json
-import subprocess
 import socket
 import time
 
@@ -198,6 +197,7 @@ if __name__ == '__main__':
                 proto = nexthop_config.get('check').get('type')
                 target = nexthop_config.get('check').get('target')
                 timeout = nexthop_config.get('check').get('timeout')
+                onlink = 'onlink' if 'onlink' in nexthop_config else ''
 
                 # Route not found in the current routing table
                 if not is_route_exists(route, next_hop, conf_iface, conf_metric):
@@ -207,14 +207,14 @@ if __name__ == '__main__':
                         if debug: print(f'    [ ADD ] -- ip route add {route} via {next_hop} dev {conf_iface} '
                                         f'metric {conf_metric} proto failover\n###')
                         rc, command = rc_cmd(f'ip route add {route} via {next_hop} dev {conf_iface} '
-                                             f'metric {conf_metric} proto failover')
+                                             f'{onlink} metric {conf_metric} proto failover')
                         # If something is wrong and gateway not added
                         # Example: Error: Next-hop has invalid gateway.
                         if rc !=0:
                             if debug: print(f'{command} -- return-code [RC: {rc}] {next_hop} dev {conf_iface}')
                         else:
                             journal.send(f'ip route add {route} via {next_hop} dev {conf_iface} '
-                                         f'metric {conf_metric} proto failover', SYSLOG_IDENTIFIER=my_name)
+                                         f'{onlink} metric {conf_metric} proto failover', SYSLOG_IDENTIFIER=my_name)
                     else:
                         if debug: print(f'    [ TARGET_FAIL ] target checks fails for [{target}], do nothing')
                         journal.send(f'Check fail for route {route} target {target} proto {proto} '

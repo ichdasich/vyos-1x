@@ -1,4 +1,4 @@
-# Copyright (C) 2021-2023 VyOS maintainers and contributors
+# Copyright (C) 2021-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -47,6 +47,8 @@ class VyOSUnitTestSHIM:
         def setUpClass(cls):
             cls._session = ConfigSession(os.getpid())
             cls._session.save_config(save_config)
+            if os.path.exists('/tmp/vyos.smoketest.debug'):
+                cls.debug = True
             pass
 
         @classmethod
@@ -71,6 +73,11 @@ class VyOSUnitTestSHIM:
             if self.debug:
                 print('del ' + ' '.join(config))
             self._session.delete(config)
+
+        def cli_discard(self):
+            if self.debug:
+                print('DISCARD')
+            self._session.discard()
 
         def cli_commit(self):
             self._session.commit()
@@ -101,6 +108,29 @@ class VyOSUnitTestSHIM:
             error = stderr.read().decode().strip()
             ssh_client.close()
             return output, error
+
+        # Verify nftables output
+        def verify_nftables(self, nftables_search, table, inverse=False, args=''):
+            nftables_output = cmd(f'sudo nft {args} list table {table}')
+
+            for search in nftables_search:
+                matched = False
+                for line in nftables_output.split("\n"):
+                    if all(item in line for item in search):
+                        matched = True
+                        break
+                self.assertTrue(not matched if inverse else matched, msg=search)
+
+        def verify_nftables_chain(self, nftables_search, table, chain, inverse=False, args=''):
+            nftables_output = cmd(f'sudo nft {args} list chain {table} {chain}')
+
+            for search in nftables_search:
+                matched = False
+                for line in nftables_output.split("\n"):
+                    if all(item in line for item in search):
+                        matched = True
+                        break
+                self.assertTrue(not matched if inverse else matched, msg=search)
 
 # standard construction; typing suggestion: https://stackoverflow.com/a/70292317
 def ignore_warning(warning: Type[Warning]):

@@ -1,4 +1,4 @@
-# Copyright 2022-2023 VyOS maintainers and contributors <maintainers@vyos.io>
+# Copyright 2022-2024 VyOS maintainers and contributors <maintainers@vyos.io>
 #
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
@@ -14,6 +14,7 @@
 # License along with this library.  If not, see <http://www.gnu.org/licenses/>.
 
 import os
+import jmespath
 
 from vyos.base import Warning
 from vyos.utils.process import cmd
@@ -89,6 +90,24 @@ class QoSBase:
         else:
             return value
 
+    def _calc_random_detect_queue_params(self, avg_pkt, max_thr, limit=None, min_thr=None,
+                                         mark_probability=None, precedence=0):
+        params = dict()
+        avg_pkt = int(avg_pkt)
+        max_thr = int(max_thr)
+        mark_probability = int(mark_probability)
+        limit = int(limit) if limit else 4 * max_thr
+        min_thr = int(min_thr) if min_thr else ((9 + precedence) * max_thr) // 18
+
+        params['avg_pkt'] = avg_pkt
+        params['limit'] = limit * avg_pkt
+        params['min_val'] = min_thr * avg_pkt
+        params['max_val'] = max_thr * avg_pkt
+        params['burst'] = (2 * min_thr + max_thr) // 3
+        params['probability'] = 1 / mark_probability
+
+        return params
+
     def _build_base_qdisc(self, config : dict, cls_id : int):
         """
         Add/replace qdisc for every class (also default is a class). This is
@@ -128,16 +147,13 @@ class QoSBase:
             if tmp: default_tc += f' flows {tmp}'
 
             tmp = dict_search('interval', config)
-            if tmp: default_tc += f' interval {tmp}'
-
-            tmp = dict_search('interval', config)
-            if tmp: default_tc += f' interval {tmp}'
+            if tmp: default_tc += f' interval {tmp}ms'
 
             tmp = dict_search('queue_limit', config)
             if tmp: default_tc += f' limit {tmp}'
 
             tmp = dict_search('target', config)
-            if tmp: default_tc += f' target {tmp}'
+            if tmp: default_tc += f' target {tmp}ms'
 
             default_tc += f' noecn'
 
@@ -145,6 +161,18 @@ class QoSBase:
 
         elif queue_type == 'random-detect':
             default_tc += f' red'
+
+            qparams = self._calc_random_detect_queue_params(
+                avg_pkt=dict_search('average_packet', config),
+                max_thr=dict_search('maximum_threshold', config),
+                limit=dict_search('queue_limit', config),
+                min_thr=dict_search('minimum_threshold', config),
+                mark_probability=dict_search('mark_probability', config)
+            )
+
+            default_tc += f' limit {qparams["limit"]} avpkt {qparams["avg_pkt"]}'
+            default_tc += f' max {qparams["max_val"]} min {qparams["min_val"]}'
+            default_tc += f' burst {qparams["burst"]} probability {qparams["probability"]}'
 
             self._cmd(default_tc)
 
@@ -166,14 +194,17 @@ class QoSBase:
         }
 
         if rate == 'auto' or rate.endswith('%'):
-            speed = 10
+            speed = 1000
+            default_speed = speed
             # Not all interfaces have valid entries in the speed file. PPPoE
             # interfaces have the appropriate speed file, but you can not read it:
             # cat: /sys/class/net/pppoe7/speed: Invalid argument
             try:
                 speed = read_file(f'/sys/class/net/{self._interface}/speed')
                 if not speed.isnumeric():
-                    Warning('Interface speed cannot be determined (assuming 10 Mbit/s)')
+                    Warning('Interface speed cannot be determined (assuming 1000 Mbit/s)')
+                if int(speed) < 1:
+                    speed = default_speed
                 if rate.endswith('%'):
                     percent = rate.rstrip('%')
                     speed = int(speed) * int(percent) // 100
@@ -216,13 +247,23 @@ class QoSBase:
                 filter_cmd_base += ' protocol all'
 
                 if 'match' in cls_config:
+                    has_filter = False
                     for index, (match, match_config) in enumerate(cls_config['match'].items(), start=1):
                         filter_cmd = filter_cmd_base
+                        if not has_filter:
+                            for key in ['mark', 'vif', 'ip', 'ipv6']:
+                                if key in match_config:
+                                    has_filter = True
+                                    break
+
                         if self.qostype == 'shaper' and 'prio ' not in filter_cmd:
                             filter_cmd += f' prio {index}'
                         if 'mark' in match_config:
                             mark = match_config['mark']
                             filter_cmd += f' handle {mark} fw'
+                        if 'vif' in match_config:
+                            vif = match_config['vif']
+                            filter_cmd += f' basic match "meta(vlan mask 0xfff eq {vif})"'
 
                         for af in ['ip', 'ipv6']:
                             tc_af = af
@@ -298,35 +339,37 @@ class QoSBase:
                                 filter_cmd += f' flowid {self._parent:x}:{cls:x}'
                                 self._cmd(filter_cmd)
 
-                    if any(tmp in ['exceed', 'bandwidth', 'burst'] for tmp in cls_config):
-                        filter_cmd += f' action police'
+                    vlan_expression = "match.*.vif"
+                    match_vlan = jmespath.search(vlan_expression, cls_config)
 
-                        if 'exceed' in cls_config:
-                            action = cls_config['exceed']
-                            filter_cmd += f' conform-exceed {action}'
-                        if 'not_exceed' in cls_config:
-                            action = cls_config['not_exceed']
-                            filter_cmd += f'/{action}'
+                    if any(tmp in ['exceed', 'bandwidth', 'burst'] for tmp in cls_config) \
+                        and has_filter:
+                        # For "vif" "basic match" is used instead of "action police" T5961
+                        if not match_vlan:
+                            filter_cmd += f' action police'
 
-                        if 'bandwidth' in cls_config:
-                            rate = self._rate_convert(cls_config['bandwidth'])
-                            filter_cmd += f' rate {rate}'
+                            if 'exceed' in cls_config:
+                                action = cls_config['exceed']
+                                filter_cmd += f' conform-exceed {action}'
+                            if 'not_exceed' in cls_config:
+                                action = cls_config['not_exceed']
+                                filter_cmd += f'/{action}'
 
-                        if 'burst' in cls_config:
-                            burst = cls_config['burst']
-                            filter_cmd += f' burst {burst}'
+                            if 'bandwidth' in cls_config:
+                                rate = self._rate_convert(cls_config['bandwidth'])
+                                filter_cmd += f' rate {rate}'
+
+                            if 'burst' in cls_config:
+                                burst = cls_config['burst']
+                                filter_cmd += f' burst {burst}'
+
+                            if 'mtu' in cls_config:
+                                mtu = cls_config['mtu']
+                                filter_cmd += f' mtu {mtu}'
+
                         cls = int(cls)
                         filter_cmd += f' flowid {self._parent:x}:{cls:x}'
                         self._cmd(filter_cmd)
-
-                else:
-
-                    filter_cmd += ' basic'
-
-                    cls = int(cls)
-                    filter_cmd += f' flowid {self._parent:x}:{cls:x}'
-                    self._cmd(filter_cmd)
-
 
                 # The police block allows limiting of the byte or packet rate of
                 # traffic matched by the filter it is attached to.
@@ -386,6 +429,10 @@ class QoSBase:
                 if 'burst' in config['default']:
                     burst = config['default']['burst']
                     filter_cmd += f' burst {burst}'
+
+                if 'mtu' in config['default']:
+                    mtu = config['default']['mtu']
+                    filter_cmd += f' mtu {mtu}'
 
                 if 'class' in config:
                     filter_cmd += f' flowid {self._parent:x}:{default_cls_id:x}'

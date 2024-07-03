@@ -1,4 +1,4 @@
-# Copyright (C) 2019-2023 VyOS maintainers and contributors
+# Copyright (C) 2019-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -11,8 +11,6 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-from binascii import hexlify
 
 from netifaces import AF_INET
 from netifaces import AF_INET6
@@ -179,7 +177,7 @@ class BasicInterfaceTest:
 
             for interface in self._interfaces:
                 # Check if dhclient process runs
-                dhclient_pid = process_named_running(dhclient_process_name, cmdline=interface)
+                dhclient_pid = process_named_running(dhclient_process_name, cmdline=interface, timeout=10)
                 self.assertTrue(dhclient_pid)
 
                 dhclient_config = read_file(f'{dhclient_base_dir}/dhclient_{interface}.conf')
@@ -216,7 +214,7 @@ class BasicInterfaceTest:
                 self.assertEqual(tmp, vrf_name)
 
                 # Check if dhclient process runs
-                dhclient_pid = process_named_running(dhclient_process_name, cmdline=interface)
+                dhclient_pid = process_named_running(dhclient_process_name, cmdline=interface, timeout=10)
                 self.assertTrue(dhclient_pid)
                 # .. inside the appropriate VRF instance
                 vrf_pids = cmd(f'ip vrf pids {vrf_name}')
@@ -251,7 +249,7 @@ class BasicInterfaceTest:
                 self.assertEqual(tmp, vrf_name)
 
                 # Check if dhclient process runs
-                tmp = process_named_running(dhcp6c_process_name, cmdline=interface)
+                tmp = process_named_running(dhcp6c_process_name, cmdline=interface, timeout=10)
                 self.assertTrue(tmp)
                 # .. inside the appropriate VRF instance
                 vrf_pids = cmd(f'ip vrf pids {vrf_name}')
@@ -317,6 +315,22 @@ class BasicInterfaceTest:
                 tmp = read_file(f'/sys/class/net/{intf}/ifalias')
                 self.assertEqual(tmp, str())
                 self.assertEqual(Interface(intf).get_alias(), str())
+
+            # Test maximum interface description lengt (255 characters)
+            test_string='abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789___'
+            for intf in self._interfaces:
+
+                self.cli_set(self._base_path + [intf, 'description', test_string])
+                for option in self._options.get(intf, []):
+                    self.cli_set(self._base_path + [intf] + option.split())
+
+            self.cli_commit()
+
+            # Validate interface description
+            for intf in self._interfaces:
+                tmp = read_file(f'/sys/class/net/{intf}/ifalias')
+                self.assertEqual(tmp, test_string)
+                self.assertEqual(Interface(intf).get_alias(), test_string)
 
         def test_add_single_ip_address(self):
             addr = '192.0.2.0/31'
@@ -505,8 +519,7 @@ class BasicInterfaceTest:
                     base = self._base_path + [interface, 'vif', vlan]
                     self.cli_set(base + ['mtu', mtu_9000])
 
-            # check validate() - VIF MTU must not be larger the parent interface
-            # MTU size.
+            # check validate() - Interface MTU "9000" too high, parent interface MTU is "1500"!
             with self.assertRaises(ConfigSessionError):
                 self.cli_commit()
 
@@ -945,7 +958,7 @@ class BasicInterfaceTest:
                 duid_base += 1
 
                 # Better ask the process about it's commandline in the future
-                pid = process_named_running(dhcp6c_process_name, cmdline=interface)
+                pid = process_named_running(dhcp6c_process_name, cmdline=interface, timeout=10)
                 self.assertTrue(pid)
 
                 dhcp6c_options = read_file(f'/proc/{pid}/cmdline')
@@ -1004,7 +1017,7 @@ class BasicInterfaceTest:
                     address = str(int(address) + 1)
 
                 # Check for running process
-                self.assertTrue(process_named_running(dhcp6c_process_name, cmdline=interface))
+                self.assertTrue(process_named_running(dhcp6c_process_name, cmdline=interface, timeout=10))
 
             for delegatee in delegatees:
                 # we can already cleanup the test delegatee interface here
@@ -1070,7 +1083,7 @@ class BasicInterfaceTest:
                     address = str(int(address) + 1)
 
                 # Check for running process
-                self.assertTrue(process_named_running(dhcp6c_process_name, cmdline=interface))
+                self.assertTrue(process_named_running(dhcp6c_process_name, cmdline=interface, timeout=10))
 
             for delegatee in delegatees:
                 # we can already cleanup the test delegatee interface here

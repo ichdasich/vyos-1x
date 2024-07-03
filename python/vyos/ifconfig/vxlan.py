@@ -1,4 +1,4 @@
-# Copyright 2019-2023 VyOS maintainers and contributors <maintainers@vyos.io>
+# Copyright 2019-2024 VyOS maintainers and contributors <maintainers@vyos.io>
 #
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
@@ -13,9 +13,6 @@
 # You should have received a copy of the GNU Lesser General Public
 # License along with this library.  If not, see <http://www.gnu.org/licenses/>.
 
-from json import loads
-
-from vyos import ConfigError
 from vyos.configdict import list_diff
 from vyos.ifconfig import Interface
 from vyos.utils.assertion import assert_list
@@ -112,7 +109,7 @@ class VXLANIf(Interface):
         # interface is always A/D down. It needs to be enabled explicitly
         self.set_admin_state('down')
 
-        # VXLAN tunnel is always recreated on any change - see interfaces-vxlan.py
+        # VXLAN tunnel is always recreated on any change - see interfaces_vxlan.py
         if remote_list:
             for remote in remote_list:
                 cmd = f'bridge fdb append to 00:00:00:00:00:00 dst {remote} ' \
@@ -141,10 +138,13 @@ class VXLANIf(Interface):
             raise ValueError('Value out of range')
 
         if 'vlan_to_vni_removed' in self.config:
-            cur_vni_filter = get_vxlan_vni_filter(self.ifname)
+            cur_vni_filter = None
+            if dict_search('parameters.vni_filter', self.config) != None:
+                cur_vni_filter = get_vxlan_vni_filter(self.ifname)
+
             for vlan, vlan_config in self.config['vlan_to_vni_removed'].items():
                 # If VNI filtering is enabled, remove matching VNI filter
-                if dict_search('parameters.vni_filter', self.config) != None:
+                if cur_vni_filter != None:
                     vni = vlan_config['vni']
                     if vni in cur_vni_filter:
                         self._cmd(f'bridge vni delete dev {self.ifname} vni {vni}')

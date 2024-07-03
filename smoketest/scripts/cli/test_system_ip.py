@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2020-2023 VyOS maintainers and contributors
+# Copyright (C) 2020-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -37,17 +37,6 @@ class TestSystemIP(VyOSUnitTestSHIM.TestCase):
         self.cli_commit()
 
         self.assertEqual(read_file(all_forwarding), '0')
-
-    def test_system_ip_directed_broadcast_forwarding(self):
-        # Test if IPv4 directed broadcast forwarding can be disabled globally,
-        # default is '1' which means forwarding enabled
-        bc_forwarding = '/proc/sys/net/ipv4/conf/all/bc_forwarding'
-        self.assertEqual(read_file(bc_forwarding), '1')
-
-        self.cli_set(base_path + ['disable-directed-broadcast'])
-        self.cli_commit()
-
-        self.assertEqual(read_file(bc_forwarding), '0')
 
     def test_system_ip_multipath(self):
         # Test IPv4 multipathing options, options default to off -> '0'
@@ -119,6 +108,19 @@ class TestSystemIP(VyOSUnitTestSHIM.TestCase):
 
         # Commit again
         self.cli_commit()
+
+    def test_system_ip_nht(self):
+        self.cli_set(base_path + ['nht', 'no-resolve-via-default'])
+        self.cli_commit()
+        # Verify CLI config applied to FRR
+        frrconfig = self.getFRRconfig('', end='', daemon='zebra')
+        self.assertIn(f'no ip nht resolve-via-default', frrconfig)
+
+        self.cli_delete(base_path + ['nht', 'no-resolve-via-default'])
+        self.cli_commit()
+        # Verify CLI config removed to FRR
+        frrconfig = self.getFRRconfig('', end='', daemon='zebra')
+        self.assertNotIn(f'no ip nht resolve-via-default', frrconfig)
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

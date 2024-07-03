@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-# Copyright 2019-2023 VyOS maintainers and contributors <maintainers@vyos.io>
+# Copyright 2019-2024 VyOS maintainers and contributors <maintainers@vyos.io>
 #
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
@@ -16,14 +16,14 @@
 # License along with this library.  If not, see <http://www.gnu.org/licenses/>.
 
 import sys
-import os
 import tempfile
 import vyos.defaults
 import vyos.remote
 
 from vyos.config import Config
 from vyos.configtree import ConfigTree
-from vyos.migrator import Migrator, VirtualMigrator
+from vyos.migrate import ConfigMigrate
+from vyos.migrate import ConfigMigrateError
 from vyos.utils.process import cmd
 from vyos.utils.process import DEVNULL
 
@@ -62,15 +62,11 @@ with tempfile.NamedTemporaryFile() as file_to_migrate:
     with open(file_to_migrate.name, 'w') as fd:
         fd.write(config_file)
 
-    virtual_migration = VirtualMigrator(file_to_migrate.name)
-    virtual_migration.run()
-
-    migration = Migrator(file_to_migrate.name)
-    migration.run()
-
-    if virtual_migration.config_changed() or migration.config_changed():
-        with open(file_to_migrate.name, 'r') as fd:
-            config_file = fd.read()
+    config_migrate = ConfigMigrate(file_to_migrate.name)
+    try:
+        config_migrate.run()
+    except ConfigMigrateError as e:
+        sys.exit(e)
 
 merge_config_tree = ConfigTree(config_file)
 

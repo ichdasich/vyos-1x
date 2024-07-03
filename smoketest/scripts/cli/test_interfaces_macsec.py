@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2020-2023 VyOS maintainers and contributors
+# Copyright (C) 2020-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -18,14 +18,12 @@ import re
 import unittest
 
 from base_interfaces_test import BasicInterfaceTest
-from netifaces import interfaces
 
 from vyos.configsession import ConfigSessionError
 from vyos.ifconfig import Section
 from vyos.utils.file import read_file
 from vyos.utils.network import get_interface_config
 from vyos.utils.network import interface_exists
-from vyos.utils.process import cmd
 from vyos.utils.process import process_named_running
 
 PROCESS_NAME = 'wpa_supplicant'
@@ -227,11 +225,11 @@ class MACsecInterfaceTest(BasicInterfaceTest.TestCase):
             self.cli_commit()
         self.cli_delete(self._base_path + [interface, 'security', 'mka'])
 
-        # check validate() - tx-key required
+        # check validate() - key required
         with self.assertRaises(ConfigSessionError):
             self.cli_commit()
 
-        # check validate() - tx-key length must match cipher
+        # check validate() - key length must match cipher
         self.cli_set(self._base_path + [interface, 'security', 'static', 'key', tx_key_2])
         with self.assertRaises(ConfigSessionError):
             self.cli_commit()
@@ -241,7 +239,7 @@ class MACsecInterfaceTest(BasicInterfaceTest.TestCase):
         with self.assertRaises(ConfigSessionError):
             self.cli_commit()
 
-        # check validate() - enabled peer must have both rx-key and MAC defined
+        # check validate() - enabled peer must have both key and MAC defined
         self.cli_set(self._base_path + [interface, 'security', 'static', 'peer', 'TESTPEER'])
         with self.assertRaises(ConfigSessionError):
             self.cli_commit()
@@ -254,7 +252,7 @@ class MACsecInterfaceTest(BasicInterfaceTest.TestCase):
             self.cli_commit()
         self.cli_set(self._base_path + [interface, 'security', 'static', 'peer', 'TESTPEER', 'mac', peer_mac])
 
-        # check validate() - peer rx-key length must match cipher
+        # check validate() - peer key length must match cipher
         self.cli_set(self._base_path + [interface, 'security', 'cipher', cipher2])
         self.cli_set(self._base_path + [interface, 'security', 'static', 'key', tx_key_2])
         with self.assertRaises(ConfigSessionError):

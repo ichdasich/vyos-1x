@@ -15,17 +15,23 @@
           <constraintErrorMessage>Container name must be alphanumeric and can contain hyphens</constraintErrorMessage>
         </properties>
         <children>
-          <leafNode name="allow-host-networks">
+          <leafNode name="allow-host-pid">
             <properties>
-              <help>Allow host networks in container</help>
+              <help>Allow sharing host process namespace with container</help>
               <valueless/>
             </properties>
           </leafNode>
-          <leafNode name="cap-add">
+          <leafNode name="allow-host-networks">
             <properties>
-              <help>Container capabilities/permissions</help>
+              <help>Allow sharing host networking with container</help>
+              <valueless/>
+            </properties>
+          </leafNode>
+          <leafNode name="capability">
+            <properties>
+              <help>Grant individual Linux capability to container instance</help>
               <completionHelp>
-                <list>net-admin net-bind-service net-raw setpcap sys-admin sys-module sys-time</list>
+                <list>net-admin net-bind-service net-raw setpcap sys-admin sys-module sys-nice sys-time</list>
               </completionHelp>
               <valueHelp>
                 <format>net-admin</format>
@@ -52,15 +58,48 @@
                 <description>Load, unload and delete kernel modules</description>
               </valueHelp>
               <valueHelp>
+                <format>sys-nice</format>
+                <description>Permission to set process nice value</description>
+              </valueHelp>
+              <valueHelp>
                 <format>sys-time</format>
                 <description>Permission to set system clock</description>
               </valueHelp>
               <constraint>
-                <regex>(net-admin|net-bind-service|net-raw|setpcap|sys-admin|sys-module|sys-time)</regex>
+                <regex>(net-admin|net-bind-service|net-raw|setpcap|sys-admin|sys-module|sys-nice|sys-time)</regex>
               </constraint>
               <multi/>
             </properties>
           </leafNode>
+          <node name="sysctl">
+            <properties>
+              <help>Configure namespaced kernel parameters of the container</help>
+            </properties>
+            <children>
+              <tagNode name="parameter">
+                <properties>
+                  <help>Sysctl key name</help>
+                  <completionHelp>
+                    <script>${vyos_completion_dir}/list_container_sysctl_parameters.sh</script>
+                  </completionHelp>
+                  <valueHelp>
+                    <format>txt</format>
+                    <description>Sysctl key name</description>
+                  </valueHelp>
+                  <constraint>
+                    <validator name="sysctl"/>
+                  </constraint>
+                </properties>
+                <children>
+                  <leafNode name="value">
+                    <properties>
+                      <help>Sysctl configuration value</help>
+                    </properties>
+                  </leafNode>
+                </children>
+              </tagNode>
+            </children>
+          </node>
           #include <include/generic-description.xml.i>
           <tagNode name="device">
             <properties>
@@ -128,7 +167,17 @@
           </leafNode>
           <leafNode name="image">
             <properties>
-              <help>Image name in the hub-registry</help>
+              <help>Container image to use</help>
+              <completionHelp>
+                <script>sudo podman image list --format "{{.Repository}}:{{.Tag}}"</script>
+              </completionHelp>
+              <valueHelp>
+                <format>txt</format>
+                <description>Image name in the hub-registry</description>
+              </valueHelp>
+              <constraint>
+                <regex>[[:ascii:]]{1,255}</regex>
+              </constraint>
             </properties>
           </leafNode>
           <leafNode name="command">
@@ -165,10 +214,31 @@
                     <format>txt</format>
                     <description>Set label option value</description>
                   </valueHelp>
+                  <constraint>
+                    <regex>[[:ascii:]]{1,255}</regex>
+                  </constraint>
                 </properties>
               </leafNode>
             </children>
           </tagNode>
+          <leafNode name="cpu-quota">
+            <properties>
+              <help>This limits the number of CPU resources the container can use</help>
+              <valueHelp>
+                <format>u32:0</format>
+                <description>Unlimited</description>
+              </valueHelp>
+              <valueHelp>
+                <format>txt</format>
+                <description>Amount of CPU time the container can use in amount of cores (up to three decimals)</description>
+              </valueHelp>
+              <constraint>
+                <regex>(0|[1-9]\d*)(\.\d{1,3})?</regex>
+              </constraint>
+              <constraintErrorMessage>Container CPU limit must be a (decimal) number in range 0 to number of threads</constraintErrorMessage>
+            </properties>
+            <defaultValue>0</defaultValue>
+          </leafNode>
           <leafNode name="memory">
             <properties>
               <help>Memory (RAM) available to this container</help>
@@ -211,6 +281,7 @@
               <completionHelp>
                 <path>container network</path>
               </completionHelp>
+              #include <include/constraint/container-network.xml.i>
             </properties>
             <children>
               <leafNode name="address">
@@ -316,6 +387,30 @@
             </properties>
             <defaultValue>on-failure</defaultValue>
           </leafNode>
+          <leafNode name="uid">
+            <properties>
+              <help>User ID this container will run as</help>
+              <valueHelp>
+                <format>u32:0-65535</format>
+                <description>User ID this container will run as</description>
+              </valueHelp>
+              <constraint>
+                <validator name="numeric" argument="--range 0-65535"/>
+              </constraint>
+            </properties>
+          </leafNode>
+          <leafNode name="gid">
+            <properties>
+              <help>Group ID this container will run as</help>
+              <valueHelp>
+                <format>u32:0-65535</format>
+                <description>Group ID this container will run as</description>
+              </valueHelp>
+              <constraint>
+                <validator name="numeric" argument="--range 0-65535"/>
+              </constraint>
+            </properties>
+          </leafNode>
           <tagNode name="volume">
             <properties>
               <help>Mount a volume into the container</help>
@@ -402,10 +497,7 @@
       <tagNode name="network">
         <properties>
           <help>Network name</help>
-          <constraint>
-            <regex>[-_a-zA-Z0-9]{1,11}</regex>
-          </constraint>
-          <constraintErrorMessage>Network name cannot be longer than 11 characters</constraintErrorMessage>
+          #include <include/constraint/container-network.xml.i>
         </properties>
         <children>
           #include <include/generic-description.xml.i>

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2023 VyOS maintainers and contributors
+# Copyright (C) 2023-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -18,7 +18,7 @@ import os
 import re
 
 from argparse import ArgumentParser
-from datetime import datetime, timedelta, time as type_time, date as type_date
+from datetime import datetime
 from sys import exit
 from time import time
 
@@ -110,7 +110,7 @@ def check_unsaved_config():
     from vyos.config_mgmt import unsaved_commits
     from vyos.utils.boot import boot_configuration_success
 
-    if unsaved_commits() and boot_configuration_success():
+    if unsaved_commits(allow_missing_config=True) and boot_configuration_success():
         print("Warning: there are unsaved configuration changes!")
         print("Run 'save' command if you do not want to lose those changes after reboot/shutdown.")
     else:
@@ -191,7 +191,7 @@ def main():
                         nargs="*",
                         metavar="HH:MM")
 
-    action.add_argument("--reboot_in", "-i",
+    action.add_argument("--reboot-in", "-i",
                         help="Reboot the system",
                         nargs="*",
                         metavar="Minutes")
@@ -214,7 +214,7 @@ def main():
         if args.reboot is not None:
             for r in args.reboot:
                 if ':' not in r and '/' not in r and '.' not in r:
-                    print("Incorrect  format! Use HH:MM")
+                    print("Incorrect format! Use HH:MM")
                     exit(1)
             execute_shutdown(args.reboot, reboot=True, ask=args.yes)
         if args.reboot_in is not None:

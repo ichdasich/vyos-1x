@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-#
 # Copyright (C) 2022 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
@@ -89,8 +87,14 @@ def parse_nat_rule(rule_conf, rule_id, nat_type, ipv6=False):
             if addr and is_ip_network(addr):
                 if not ipv6:
                     map_addr =  dict_search_args(rule_conf, nat_type, 'address')
-                    translation_output.append(f'{ip_prefix} prefix to {ip_prefix} {translation_prefix}addr map {{ {map_addr} : {addr} }}')
-                    ignore_type_addr = True
+                    if map_addr:
+                        if port:
+                            translation_output.append(f'{ip_prefix} prefix to {ip_prefix} {translation_prefix}addr map {{ {map_addr} : {addr} . {port} }}')
+                        else:
+                            translation_output.append(f'{ip_prefix} prefix to {ip_prefix} {translation_prefix}addr map {{ {map_addr} : {addr} }}')
+                        ignore_type_addr = True
+                    else:
+                        translation_output.append(f'prefix to {addr}')
                 else:
                     translation_output.append(f'prefix to {addr}')
             elif addr == 'masquerade':
@@ -112,7 +116,10 @@ def parse_nat_rule(rule_conf, rule_id, nat_type, ipv6=False):
         if port_mapping and port_mapping != 'none':
             options.append(port_mapping)
 
-        translation_str = " ".join(translation_output) + (f':{port}' if port else '')
+        if ((not addr) or (addr and not is_ip_network(addr))) and port:
+            translation_str = " ".join(translation_output) + (f':{port}')
+        else:
+            translation_str = " ".join(translation_output)
 
         if options:
             translation_str += f' {",".join(options)}'
@@ -293,11 +300,11 @@ def parse_nat_static_rule(rule_conf, rule_id, nat_type):
 
     output.append('counter')
 
-    if translation_str:
-        output.append(translation_str)
-
     if 'log' in rule_conf:
         output.append(f'log prefix "[{log_prefix}{log_suffix}]"')
+
+    if translation_str:
+        output.append(translation_str)
 
     output.append(f'comment "{log_prefix}"')
 

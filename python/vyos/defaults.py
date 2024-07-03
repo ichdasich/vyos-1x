@@ -1,4 +1,4 @@
-# Copyright 2018-2023 VyOS maintainers and contributors <maintainers@vyos.io>
+# Copyright 2018-2024 VyOS maintainers and contributors <maintainers@vyos.io>
 #
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
@@ -25,6 +25,7 @@ directories = {
   'services' : f'{base_dir}/services',
   'config' : '/opt/vyatta/etc/config',
   'migrate' : '/opt/vyatta/etc/config-migrate/migrate',
+  'activate' : f'{base_dir}/activate',
   'log' : '/var/log/vyatta',
   'templates' : '/usr/share/vyos/templates/',
   'certbot' : '/config/auth/letsencrypt',
@@ -34,25 +35,18 @@ directories = {
   'vyos_udev_dir' : '/run/udev/vyos',
   'isc_dhclient_dir' : '/run/dhclient',
   'dhcp6_client_dir' : '/run/dhcp6c',
+  'vyos_configdir' : '/opt/vyatta/config'
 }
 
 config_status = '/tmp/vyos-config-status'
+api_config_state = '/run/http-api-state'
 
 cfg_group = 'vyattacfg'
 
 cfg_vintage = 'vyos'
 
-commit_lock = '/opt/vyatta/config/.lock'
+commit_lock = os.path.join(directories['vyos_configdir'], '.lock')
 
 component_version_json = os.path.join(directories['data'], 'component-versions.json')
 
-https_data = {
-    'listen_addresses' : { '*': ['_'] }
-}
-
-vyos_cert_data = {
-    'conf' : '/etc/nginx/snippets/vyos-cert.conf',
-    'crt' : '/etc/ssl/certs/vyos-selfsigned.crt',
-    'key' : '/etc/ssl/private/vyos-selfsign',
-    'lifetime' : '365',
-}
+config_default = os.path.join(directories['data'], 'config.boot.default')

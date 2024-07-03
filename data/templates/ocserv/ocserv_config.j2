@@ -61,7 +61,15 @@ keepalive = 300
 dpd = 60
 mobile-dpd = 300
 switch-to-tcp-timeout = 30
+{% if tls_version_min == '1.0' %}
 tls-priorities = "NORMAL:%SERVER_PRECEDENCE:%COMPAT:-RSA:-VERS-SSL3.0:-ARCFOUR-128"
+{% elif tls_version_min == '1.1' %}
+tls-priorities = "NORMAL:%SERVER_PRECEDENCE:%COMPAT:-RSA:-VERS-SSL3.0:-ARCFOUR-128:-VERS-TLS1.0"
+{% elif tls_version_min == '1.2' %}
+tls-priorities = "NORMAL:%SERVER_PRECEDENCE:%COMPAT:-RSA:-VERS-SSL3.0:-ARCFOUR-128:-VERS-TLS1.0:-VERS-TLS1.1"
+{% elif tls_version_min == '1.3' %}
+tls-priorities = "NORMAL:%SERVER_PRECEDENCE:%COMPAT:-RSA:-VERS-SSL3.0:-ARCFOUR-128:-VERS-TLS1.0:-VERS-TLS1.1:-VERS-TLS1.2"
+{% endif %}
 auth-timeout = 240
 idle-timeout = 1200
 mobile-idle-timeout = 1800
@@ -121,12 +129,12 @@ select-group = {{ grp }}
 {%     endfor %}
 {% endif %}
 
-
+{% if http_security_headers is vyos_defined %}
 # HTTP security headers
 included-http-headers = Strict-Transport-Security: max-age=31536000 ; includeSubDomains
 included-http-headers = X-Frame-Options: deny
 included-http-headers = X-Content-Type-Options: nosniff
-included-http-headers = Content-Security-Policy: default-src ´none´
+included-http-headers = Content-Security-Policy: default-src "none"
 included-http-headers = X-Permitted-Cross-Domain-Policies: none
 included-http-headers = Referrer-Policy: no-referrer
 included-http-headers = Clear-Site-Data: "cache","cookies","storage"
@@ -136,3 +144,4 @@ included-http-headers = Cross-Origin-Resource-Policy: same-origin
 included-http-headers = X-XSS-Protection: 0
 included-http-headers = Pragma: no-cache
 included-http-headers = Cache-control: no-store, no-cache
+{% endif %}

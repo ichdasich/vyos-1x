@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2020-2023 VyOS maintainers and contributors
+# Copyright (C) 2020-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -15,13 +15,11 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import os
-import re
 from pathlib import Path
 
 from vyos.config import Config
 from vyos.utils.process import call
-from vyos.utils.file import read_file
-from vyos.utils.file import write_file
+from vyos.system import grub_util
 from vyos.template import render
 from vyos import ConfigError
 from vyos import airbag
@@ -114,30 +112,7 @@ def generate(console):
         return None
 
     speed = console['device']['ttyS0']['speed']
-    grub_config = '/boot/grub/grub.cfg'
-    if not os.path.isfile(grub_config):
-        return None
-
-    lines = read_file(grub_config).split('\n')
-    p = re.compile(r'^(.* console=ttyS0),[0-9]+(.*)$')
-    write = False
-    newlines = []
-    for line in lines:
-        if line.startswith('serial --unit'):
-            newline = f'serial --unit=0 --speed={speed}'
-        elif p.match(line):
-            newline = '{},{}{}'.format(p.search(line)[1], speed, p.search(line)[2])
-        else:
-            newline = line
-
-        if newline != line:
-            write = True
-
-        newlines.append(newline)
-    newlines.append('')
-
-    if write:
-        write_file(grub_config, '\n'.join(newlines))
+    grub_util.update_console_speed(speed)
 
     return None
 

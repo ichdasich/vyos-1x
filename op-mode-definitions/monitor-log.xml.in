@@ -30,6 +30,12 @@
               </leafNode>
             </children>
           </node>
+          <leafNode name="certbot">
+            <properties>
+              <help>Monitor last lines of certbot log</help>
+            </properties>
+            <command>if sudo test -f /var/log/letsencrypt/letsencrypt.log; then sudo tail --follow=name /var/log/letsencrypt/letsencrypt.log; else echo "Cerbot log does not exist"; fi</command>
+          </leafNode>
           <leafNode name="conntrack-sync">
             <properties>
               <help>Monitor last lines of conntrack-sync log</help>
@@ -51,7 +57,7 @@
                 <properties>
                   <help>Monitor last lines of DHCP server log</help>
                 </properties>
-                <command>journalctl --no-hostname --follow --boot --unit isc-dhcp-server.service</command>
+                <command>journalctl --no-hostname --follow --boot --unit kea-dhcp4-server.service</command>
               </node>
               <node name="client">
                 <properties>
@@ -81,7 +87,7 @@
                 <properties>
                   <help>Monitor last lines of DHCPv6 server log</help>
                 </properties>
-                <command>journalctl --no-hostname --follow --boot --unit isc-dhcp-server6.service</command>
+                <command>journalctl --no-hostname --follow --boot --unit kea-dhcp6-server.service</command>
               </node>
               <node name="client">
                 <properties>
@@ -119,6 +125,12 @@
               <help>Monitor last lines of Linux Kernel log</help>
             </properties>
             <command>journalctl --no-hostname --boot --follow --dmesg</command>
+          </leafNode>
+          <leafNode name="ndp-proxy">
+            <properties>
+              <help>Monitor last lines of Neighbor Discovery Protocol (NDP) Proxy</help>
+            </properties>
+            <command>journalctl --no-hostname --boot --follow --unit ndppd.service</command>
           </leafNode>
           <leafNode name="nhrp">
             <properties>
@@ -347,6 +359,47 @@
             </properties>
             <command>journalctl --no-hostname --boot --follow --unit keepalived.service</command>
           </leafNode>
+          <node name="wireless">
+            <properties>
+              <help>Monitor last lines of Wireless interface log</help>
+            </properties>
+            <children>
+              <node name="wpa-supplicant">
+                <properties>
+                  <help>Monitor last lines of WPA supplicant</help>
+                </properties>
+                <command>if cli-shell-api existsActive interfaces wireless; then journalctl --no-hostname --boot --follow --unit "wpa_supplicant@*.service"; else echo "No wireless interface configured!"; fi</command>
+                <children>
+                  <tagNode name="interface">
+                    <properties>
+                      <help>Monitor last lines of specific wireless interface supplicant</help>
+                      <completionHelp>
+                        <path>interfaces wireless</path>
+                      </completionHelp>
+                    </properties>
+                    <command>if [[ $(cli-shell-api returnActiveValue interfaces wireless $6 type) == "station" ]]; then journalctl --no-hostname --boot --follow --unit "wpa_supplicant@$6.service"; else echo "Wireless interface $6 not configured as station!"; fi</command>
+                  </tagNode>
+                </children>
+              </node>
+              <node name="hostapd">
+                <properties>
+                  <help>Monitor last lines of host access point daemon</help>
+                </properties>
+                <command>if cli-shell-api existsActive interfaces wireless; then journalctl --no-hostname --boot --follow --unit "hostapd@*.service"; else echo "No wireless interface configured!"; fi</command>
+                <children>
+                  <tagNode name="interface">
+                    <properties>
+                      <help>Monitor last lines of specific host access point interface</help>
+                      <completionHelp>
+                        <path>interfaces wireless</path>
+                      </completionHelp>
+                    </properties>
+                    <command>if [[ $(cli-shell-api returnActiveValue interfaces wireless $6 type) == "access-point" ]]; then journalctl --no-hostname --boot --follow --unit "hostapd@$6.service"; else echo "Wireless interface $6 not configured as access-point!"; fi</command>
+                  </tagNode>
+                </children>
+              </node>
+            </children>
+          </node>
         </children>
       </node>
     </children>

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2020-2023 VyOS maintainers and contributors
+# Copyright (C) 2020-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -14,12 +14,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import jmespath
-import json
 import os
 
 from sys import exit
-from netifaces import interfaces
 
 from vyos.base import Warning
 from vyos.config import Config
@@ -32,6 +29,7 @@ from vyos.utils.dict import dict_search_args
 from vyos.utils.process import cmd
 from vyos.utils.process import run
 from vyos.utils.network import is_addr_assigned
+from vyos.utils.network import interface_exists
 from vyos import ConfigError
 
 from vyos import airbag
@@ -69,6 +67,10 @@ def get_config(config=None):
     nat['firewall_group'] = conf.get_config_dict(['firewall', 'group'], key_mangling=('-', '_'), get_first_key=True,
                                     no_tag_node_value_mangle=True)
 
+    # Remove dynamic firewall groups if present:
+    if 'dynamic_group' in nat['firewall_group']:
+        del nat['firewall_group']['dynamic_group']
+
     return nat
 
 def verify_rule(config, err_msg, groups_dict):
@@ -80,15 +82,8 @@ def verify_rule(config, err_msg, groups_dict):
         dict_search('source.port', config)):
 
         if config['protocol'] not in ['tcp', 'udp', 'tcp_udp']:
-            raise ConfigError(f'{err_msg}\n' \
-                              'ports can only be specified when protocol is '\
-                              'either tcp, udp or tcp_udp!')
-
-        if is_ip_network(dict_search('translation.address', config)):
-            raise ConfigError(f'{err_msg}\n' \
-                             'Cannot use ports with an IPv4 network as translation address as it\n' \
-                             'statically maps a whole network of addresses onto another\n' \
-                             'network of addresses')
+            raise ConfigError(f'{err_msg} ports can only be specified when '\
+                              'protocol is either tcp, udp or tcp_udp!')
 
     for side in ['destination', 'source']:
         if side in config:
@@ -152,10 +147,23 @@ def verify(nat):
 
             if 'outbound_interface' in config:
                 if 'name' in config['outbound_interface'] and 'group' in config['outbound_interface']:
-                    raise ConfigError(f'{err_msg} - Cannot specify both interface group and interface name for nat source rule "{rule}"')
+                    raise ConfigError(f'{err_msg} cannot specify both interface group and interface name for nat source rule "{rule}"')
                 elif 'name' in config['outbound_interface']:
-                    if config['outbound_interface']['name'] not in 'any' and config['outbound_interface']['name'] not in interfaces():
-                        Warning(f'{err_msg} - interface "{config["outbound_interface"]["name"]}" does not exist on this system')
+                    interface_name = config['outbound_interface']['name']
+                    if interface_name not in 'any':
+                        if interface_name.startswith('!'):
+                            interface_name = interface_name[1:]
+                        if not interface_exists(interface_name):
+                            Warning(f'Interface "{interface_name}" for source NAT rule "{rule}" does not exist!')
+                else:
+                    group_name = config['outbound_interface']['group']
+                    if group_name[0] == '!':
+                        group_name = group_name[1:]
+                    group_obj = dict_search_args(nat['firewall_group'], 'interface_group', group_name)
+                    if group_obj is None:
+                        raise ConfigError(f'Invalid interface group "{group_name}" on source nat rule')
+                    if not group_obj:
+                        Warning(f'interface-group "{group_name}" has no members!')
 
             if not dict_search('translation.address', config) and not dict_search('translation.port', config):
                 if 'exclude' not in config and 'backend' not in config['load_balance']:
@@ -176,10 +184,23 @@ def verify(nat):
 
             if 'inbound_interface' in config:
                 if 'name' in config['inbound_interface'] and 'group' in config['inbound_interface']:
-                    raise ConfigError(f'{err_msg} - Cannot specify both interface group and interface name for destination nat rule "{rule}"')
+                    raise ConfigError(f'{err_msg} cannot specify both interface group and interface name for destination nat rule "{rule}"')
                 elif 'name' in config['inbound_interface']:
-                    if config['inbound_interface']['name'] not in 'any' and config['inbound_interface']['name'] not in interfaces():
-                        Warning(f'{err_msg} -  interface "{config["inbound_interface"]["name"]}" does not exist on this system')
+                    interface_name = config['inbound_interface']['name']
+                    if interface_name not in 'any':
+                        if interface_name.startswith('!'):
+                            interface_name = interface_name[1:]
+                        if not interface_exists(interface_name):
+                            Warning(f'Interface "{interface_name}" for destination NAT rule "{rule}" does not exist!')
+                else:
+                    group_name = config['inbound_interface']['group']
+                    if group_name[0] == '!':
+                        group_name = group_name[1:]
+                    group_obj = dict_search_args(nat['firewall_group'], 'interface_group', group_name)
+                    if group_obj is None:
+                        raise ConfigError(f'Invalid interface group "{group_name}" on destination nat rule')
+                    if not group_obj:
+                        Warning(f'interface-group "{group_name}" has no members!')
 
             if not dict_search('translation.address', config) and not dict_search('translation.port', config) and 'redirect' not in config['translation']:
                 if 'exclude' not in config and 'backend' not in config['load_balance']:
@@ -193,8 +214,7 @@ def verify(nat):
             err_msg = f'Static NAT configuration error in rule {rule}:'
 
             if 'inbound_interface' not in config:
-                raise ConfigError(f'{err_msg}\n' \
-                                  'inbound-interface not specified')
+                raise ConfigError(f'{err_msg} inbound-interface not specified')
 
             # common rule verification
             verify_rule(config, err_msg, nat['firewall_group'])
@@ -209,19 +229,19 @@ def generate(nat):
     render(nftables_static_nat_conf, 'firewall/nftables-static-nat.j2', nat)
 
     # dry-run newly generated configuration
-    tmp = run(f'nft -c -f {nftables_nat_config}')
+    tmp = run(f'nft --check --file {nftables_nat_config}')
     if tmp > 0:
         raise ConfigError('Configuration file errors encountered!')
 
-    tmp = run(f'nft -c -f {nftables_static_nat_conf}')
+    tmp = run(f'nft --check --file {nftables_static_nat_conf}')
     if tmp > 0:
         raise ConfigError('Configuration file errors encountered!')
 
     return None
 
 def apply(nat):
-    cmd(f'nft -f {nftables_nat_config}')
-    cmd(f'nft -f {nftables_static_nat_conf}')
+    cmd(f'nft --file {nftables_nat_config}')
+    cmd(f'nft --file {nftables_static_nat_conf}')
 
     if not nat or 'deleted' in nat:
         os.unlink(nftables_nat_config)

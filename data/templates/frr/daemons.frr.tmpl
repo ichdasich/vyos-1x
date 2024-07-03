@@ -101,7 +101,7 @@ pathd_options="  --daemon -A 127.0.0.1"
 #
 
 vtysh_enable=yes
-watchfrr_enable=no
+watchfrr_enable=yes
 valgrind_enable=no
 
 #watchfrr_options=""
@@ -109,7 +109,6 @@ watchfrr_options="-i 20 -t 7200 -T 3000"
 
 frr_profile="traditional"
 
-#MAX_FDS=1024
+MAX_FDS={{ descriptors }}
 
 #FRR_NO_ROOT="yes"
-

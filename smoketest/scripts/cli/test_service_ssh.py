@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2019-2022 VyOS maintainers and contributors
+# Copyright (C) 2019-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -28,11 +28,11 @@ from vyos.utils.process import cmd
 from vyos.utils.process import is_systemd_service_running
 from vyos.utils.process import process_named_running
 from vyos.utils.file import read_file
+from vyos.xml_ref import default_value
 
 PROCESS_NAME = 'sshd'
 SSHD_CONF = '/run/sshd/sshd_config'
 base_path = ['service', 'ssh']
-vrf = 'mgmt'
 
 key_rsa = '/etc/ssh/ssh_host_rsa_key'
 key_dsa = '/etc/ssh/ssh_host_dsa_key'
@@ -51,6 +51,7 @@ class TestServiceSSH(VyOSUnitTestSHIM.TestCase):
         # ensure we can also run this test on a live system - so lets clean
         # out the current configuration :)
         cls.cli_delete(cls, base_path)
+        cls.cli_delete(cls, ['vrf'])
 
     def tearDown(self):
         # Check for running process
@@ -58,6 +59,7 @@ class TestServiceSSH(VyOSUnitTestSHIM.TestCase):
 
         # delete testing SSH config
         self.cli_delete(base_path)
+        self.cli_delete(['vrf'])
         self.cli_commit()
 
         self.assertTrue(os.path.isfile(key_rsa))
@@ -77,9 +79,10 @@ class TestServiceSSH(VyOSUnitTestSHIM.TestCase):
         # commit changes
         self.cli_commit()
 
-        # Check configured port
-        port = get_config_value('Port')[0]
-        self.assertEqual('22', port)
+        # Check configured port agains CLI default value
+        port = get_config_value('Port')
+        cli_default = default_value(base_path + ['port'])
+        self.assertEqual(port, cli_default)
 
     def test_ssh_single_listen_address(self):
         # Check if SSH service can be configured and runs
@@ -141,10 +144,9 @@ class TestServiceSSH(VyOSUnitTestSHIM.TestCase):
         for address in addresses:
             self.assertIn(address, tmp)
 
-    def test_ssh_vrf(self):
+    def test_ssh_vrf_single(self):
+        vrf = 'mgmt'
         # Check if SSH service can be bound to given VRF
-        port = '22'
-        self.cli_set(base_path + ['port', port])
         self.cli_set(base_path + ['vrf', vrf])
 
         # VRF does yet not exist - an error must be thrown
@@ -156,16 +158,32 @@ class TestServiceSSH(VyOSUnitTestSHIM.TestCase):
         # commit changes
         self.cli_commit()
 
-        # Check configured port
-        tmp = get_config_value('Port')
-        self.assertIn(port, tmp)
-
         # Check for process in VRF
         tmp = cmd(f'ip vrf pids {vrf}')
         self.assertIn(PROCESS_NAME, tmp)
 
-        # delete VRF
-        self.cli_delete(['vrf', 'name', vrf])
+    def test_ssh_vrf_multi(self):
+        # Check if SSH service can be bound to multiple VRFs
+        vrfs = ['red', 'blue', 'green']
+        for vrf in vrfs:
+            self.cli_set(base_path + ['vrf', vrf])
+
+        # VRF does yet not exist - an error must be thrown
+        with self.assertRaises(ConfigSessionError):
+            self.cli_commit()
+
+        table = 12345
+        for vrf in vrfs:
+            self.cli_set(['vrf', 'name', vrf, 'table', str(table)])
+            table += 1
+
+        # commit changes
+        self.cli_commit()
+
+        # Check for process in VRF
+        for vrf in vrfs:
+            tmp = cmd(f'ip vrf pids {vrf}')
+            self.assertIn(PROCESS_NAME, tmp)
 
     def test_ssh_login(self):
         # Perform SSH login and command execution with a predefined user. The
@@ -285,6 +303,22 @@ class TestServiceSSH(VyOSUnitTestSHIM.TestCase):
 
         for line in ssh_lines:
             self.assertIn(line, tmp_sshd_conf)
+
+    def test_ssh_pubkey_accepted_algorithm(self):
+        algs = ['ssh-ed25519', 'ecdsa-sha2-nistp256', 'ecdsa-sha2-nistp384',
+                'ecdsa-sha2-nistp521', 'ssh-dss', 'ssh-rsa', 'rsa-sha2-256',
+                'rsa-sha2-512'
+                ]
+
+        expected = 'PubkeyAcceptedAlgorithms '
+        for alg in algs:
+            self.cli_set(base_path + ['pubkey-accepted-algorithm', alg])
+            expected = f'{expected}{alg},'
+        expected = expected[:-1]
+
+        self.cli_commit()
+        tmp_sshd_conf = read_file(SSHD_CONF)
+        self.assertIn(expected, tmp_sshd_conf)
 
 
 if __name__ == '__main__':

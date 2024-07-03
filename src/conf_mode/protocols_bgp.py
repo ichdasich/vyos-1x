@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2020-2023 VyOS maintainers and contributors
+# Copyright (C) 2020-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -30,6 +30,8 @@ from vyos.template import render_to_string
 from vyos.utils.dict import dict_search
 from vyos.utils.network import get_interface_vrf
 from vyos.utils.network import is_addr_assigned
+from vyos.utils.process import process_named_running
+from vyos.utils.process import call
 from vyos import ConfigError
 from vyos import frr
 from vyos import airbag
@@ -69,21 +71,28 @@ def get_config(config=None):
     if vrf:
         bgp.update({'vrf' : vrf})
         # We can not delete the BGP VRF instance if there is a L3VNI configured
+        # FRR L3VNI must be deleted first otherwise we will see error:
+        # "FRR error: Please unconfigure l3vni 3000"
         tmp = ['vrf', 'name', vrf, 'vni']
-        if conf.exists(tmp):
-            bgp.update({'vni' : conf.return_value(tmp)})
+        if conf.exists_effective(tmp):
+            bgp.update({'vni' : conf.return_effective_value(tmp)})
         # We can safely delete ourself from the dependent vrf list
         if vrf in bgp['dependent_vrfs']:
             del bgp['dependent_vrfs'][vrf]
 
-    bgp['dependent_vrfs'].update({'default': {'protocols': {
-        'bgp': conf.get_config_dict(base_path, key_mangling=('-', '_'),
-                                    get_first_key=True,
-                                    no_tag_node_value_mangle=True)}}})
+        bgp['dependent_vrfs'].update({'default': {'protocols': {
+            'bgp': conf.get_config_dict(base_path, key_mangling=('-', '_'),
+                                        get_first_key=True,
+                                        no_tag_node_value_mangle=True)}}})
+
     if not conf.exists(base):
         # If bgp instance is deleted then mark it
         bgp.update({'deleted' : ''})
         return bgp
+
+    # We have gathered the dict representation of the CLI, but there are default
+    # options which we need to update into the dictionary retrived.
+    bgp = conf.merge_defaults(bgp, recursive=True)
 
     # We also need some additional information from the config, prefix-lists
     # and route-maps for instance. They will be used in verify().
@@ -93,6 +102,7 @@ def get_config(config=None):
     tmp = conf.get_config_dict(['policy'])
     # Merge policy dict into "regular" config dict
     bgp = dict_merge(tmp, bgp)
+
     return bgp
 
 
@@ -199,6 +209,10 @@ def verify_remote_as(peer_config, bgp_config):
         if 'v6only' in peer_config['interface']:
             if 'remote_as' in peer_config['interface']['v6only']:
                 return peer_config['interface']['v6only']['remote_as']
+            if 'peer_group' in peer_config['interface']['v6only']:
+                peer_group_name = peer_config['interface']['v6only']['peer_group']
+                tmp = dict_search(f'peer_group.{peer_group_name}.remote_as', bgp_config)
+                if tmp: return tmp
 
     return None
 
@@ -209,9 +223,12 @@ def verify_afi(peer_config, bgp_config):
 
     # If address_family configured under peer-group
     # if neighbor interface configured
-    peer_group_name = ''
+    peer_group_name = None
     if dict_search('interface.peer_group', peer_config):
         peer_group_name = peer_config['interface']['peer_group']
+    elif dict_search('interface.v6only.peer_group', peer_config):
+        peer_group_name = peer_config['interface']['v6only']['peer_group']
+
     # if neighbor IP configured.
     if 'peer_group' in peer_config:
         peer_group_name = peer_config['peer_group']
@@ -228,10 +245,6 @@ def verify(bgp):
                 if verify_vrf_as_import(bgp['vrf'], tmp_afi, bgp['dependent_vrfs']):
                     raise ConfigError(f'Cannot delete VRF instance "{bgp["vrf"]}", ' \
                                       'unconfigure "import vrf" commands!')
-            # We can not delete the BGP instance if a L3VNI instance exists
-            if 'vni' in bgp:
-                raise ConfigError(f'Cannot delete VRF instance "{bgp["vrf"]}", ' \
-                                  f'unconfigure VNI "{bgp["vni"]}" first!')
         else:
             # We are running in the default VRF context, thus we can not delete
             # our main BGP instance if there are dependent BGP VRF instances.
@@ -240,11 +253,28 @@ def verify(bgp):
                     if vrf != 'default':
                         if dict_search('protocols.bgp', vrf_options):
                             raise ConfigError('Cannot delete default BGP instance, ' \
-                                              'dependent VRF instance(s) exist!')
+                                              'dependent VRF instance(s) exist(s)!')
+                        if 'vni' in vrf_options:
+                            raise ConfigError('Cannot delete default BGP instance, ' \
+                                              'dependent L3VNI exists!')
+
         return None
 
     if 'system_as' not in bgp:
         raise ConfigError('BGP system-as number must be defined!')
+
+    # Verify BMP
+    if 'bmp' in bgp:
+        # check bmp flag "bgpd -d -F traditional --daemon -A 127.0.0.1 -M rpki -M bmp"
+        if not process_named_running('bgpd', 'bmp'):
+            raise ConfigError(
+                f'"bmp" flag is not found in bgpd. Configure "set system frr bmp" and restart bgp process'
+            )
+        # check bmp target
+        if 'target' in bgp['bmp']:
+            for target, target_config in bgp['bmp']['target'].items():
+                if 'address' not in target_config:
+                    raise ConfigError(f'BMP target "{target}" address must be defined!')
 
     # Verify vrf on interface and bgp section
     if 'interface' in bgp:
@@ -258,6 +288,7 @@ def verify(bgp):
             elif tmp != 'default':
                 raise ConfigError(f'{error_msg} "{tmp}"!')
 
+    peer_groups_context = dict()
     # Common verification for both peer-group and neighbor statements
     for neighbor in ['neighbor', 'peer_group']:
         # bail out early if there is no neighbor or peer-group statement
@@ -273,6 +304,18 @@ def verify(bgp):
                 if 'peer_group' not in bgp or peer_group not in bgp['peer_group']:
                     raise ConfigError(f'Specified peer-group "{peer_group}" for '\
                                       f'neighbor "{neighbor}" does not exist!')
+
+                if 'remote_as' in peer_config:
+                    is_ibgp = True
+                    if peer_config['remote_as'] != 'internal' and \
+                            peer_config['remote_as'] != bgp['system_as']:
+                        is_ibgp = False
+
+                    if peer_group not in peer_groups_context:
+                        peer_groups_context[peer_group] = is_ibgp
+                    elif peer_groups_context[peer_group] != is_ibgp:
+                        raise ConfigError(f'Peer-group members must be '
+                                          f'all internal or all external')
 
             if 'local_role' in peer_config:
                 #Ensure Local Role has only one value.
@@ -290,7 +333,7 @@ def verify(bgp):
                     raise ConfigError('Cannot have local-as same as system-as number')
 
                 # Neighbor AS specified for local-as and remote-as can not be the same
-                if dict_search('remote_as', peer_config) == asn:
+                if dict_search('remote_as', peer_config) == asn and neighbor != 'peer_group':
                      raise ConfigError(f'Neighbor "{peer}" has local-as specified which is '\
                                         'the same as remote-as, this is not allowed!')
 
@@ -423,13 +466,31 @@ def verify(bgp):
                             verify_route_map(afi_config['route_map'][tmp], bgp)
 
                 if 'route_reflector_client' in afi_config:
-                    if 'remote_as' in peer_config and peer_config['remote_as'] != 'internal' and peer_config['remote_as'] != bgp['system_as']:
+                    peer_group_as = peer_config.get('remote_as')
+
+                    if peer_group_as is None or (peer_group_as != 'internal' and peer_group_as != bgp['system_as']):
                         raise ConfigError('route-reflector-client only supported for iBGP peers')
                     else:
                         if 'peer_group' in peer_config:
                             peer_group_as = dict_search(f'peer_group.{peer_group}.remote_as', bgp)
-                            if peer_group_as != None and peer_group_as != 'internal' and peer_group_as != bgp['system_as']:
+                            if peer_group_as is None or (peer_group_as != 'internal' and peer_group_as != bgp['system_as']):
                                 raise ConfigError('route-reflector-client only supported for iBGP peers')
+
+            # T5833 not all AFIs are supported for VRF
+            if 'vrf' in bgp and 'address_family' in peer_config:
+                unsupported_vrf_afi = {
+                    'ipv4_flowspec',
+                    'ipv6_flowspec',
+                    'ipv4_labeled_unicast',
+                    'ipv6_labeled_unicast',
+                    'ipv4_vpn',
+                    'ipv6_vpn',
+                }
+                for afi in peer_config['address_family']:
+                    if afi in unsupported_vrf_afi:
+                        raise ConfigError(
+                            f"VRF is not allowed for address-family '{afi.replace('_', '-')}'"
+                        )
 
     # Throw an error if a peer group is not configured for allow range
     for prefix in dict_search('listen.range', bgp) or []:
@@ -482,6 +543,14 @@ def verify(bgp):
                     if verify_vrf_as_import(vrf_name, afi, bgp['dependent_vrfs']):
                         raise ConfigError(
                             'Command "import vrf" conflicts with "route-target vpn both" command!')
+                    if dict_search('route_target.vpn.export', afi_config):
+                        raise ConfigError(
+                            'Command "route-target vpn export" conflicts '\
+                            'with "route-target vpn both" command!')
+                    if dict_search('route_target.vpn.import', afi_config):
+                        raise ConfigError(
+                            'Command "route-target vpn import" conflicts '\
+                            'with "route-target vpn both" command!')
 
                 if dict_search('route_target.vpn.import', afi_config):
                     if verify_vrf_as_import(vrf_name, afi, bgp['dependent_vrfs']):
@@ -518,6 +587,10 @@ def verify(bgp):
                     tmp = dict_search(f'route_map.vpn.{export_import}', afi_config)
                     if tmp: verify_route_map(tmp, bgp)
 
+                # per-vrf sid and per-af sid are mutually exclusive
+                if 'sid' in afi_config and 'sid' in bgp:
+                    raise ConfigError('SID per VRF and SID per address-family are mutually exclusive!')
+
             # Checks only required for L2VPN EVPN
             if afi in ['l2vpn_evpn']:
                 if 'vni' in afi_config:
@@ -537,6 +610,13 @@ def generate(bgp):
     return None
 
 def apply(bgp):
+    if 'deleted' in bgp:
+        # We need to ensure that the L3VNI is deleted first.
+        # This is not possible with old config backend
+        # priority bug
+        if {'vrf', 'vni'} <= set(bgp):
+            call('vtysh -c "conf t" -c "vrf {vrf}" -c "no vni {vni}"'.format(**bgp))
+
     bgp_daemon = 'bgpd'
 
     # Save original configuration prior to starting any commit actions

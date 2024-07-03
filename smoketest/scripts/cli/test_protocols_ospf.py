@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2021-2023 VyOS maintainers and contributors
+# Copyright (C) 2021-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -16,6 +16,7 @@
 
 import unittest
 
+from time import sleep
 from base_vyostest_shim import VyOSUnitTestSHIM
 
 from vyos.configsession import ConfigSessionError
@@ -240,7 +241,7 @@ class TestProtocolsOSPF(VyOSUnitTestSHIM.TestCase):
     def test_ospf_07_redistribute(self):
         metric = '15'
         metric_type = '1'
-        redistribute = ['bgp', 'connected', 'isis', 'kernel', 'rip', 'static']
+        redistribute = ['babel', 'bgp', 'connected', 'isis', 'kernel', 'rip', 'static']
 
         for protocol in redistribute:
             self.cli_set(base_path + ['redistribute', protocol, 'metric', metric])
@@ -480,6 +481,8 @@ class TestProtocolsOSPF(VyOSUnitTestSHIM.TestCase):
         # Commit main OSPF changes
         self.cli_commit()
 
+        sleep(10)
+
         # Verify main OSPF changes
         frrconfig = self.getFRRconfig('router ospf', daemon=PROCESS_NAME)
         self.assertIn(f'router ospf', frrconfig)
@@ -539,6 +542,26 @@ class TestProtocolsOSPF(VyOSUnitTestSHIM.TestCase):
         self.assertIn(f' graceful-restart helper supported-grace-time {supported_grace_time}', frrconfig)
         for router_id in router_ids:
             self.assertIn(f' graceful-restart helper enable {router_id}', frrconfig)
+
+    def test_ospf_17_duplicate_area_network(self):
+        area0 = '0'
+        area1 = '1'
+        network = '10.0.0.0/8'
+
+        self.cli_set(base_path + ['area', area0, 'network', network])
+
+        # we can not have the same network defined on two areas
+        self.cli_set(base_path + ['area', area1, 'network', network])
+        with self.assertRaises(ConfigSessionError):
+            self.cli_commit()
+        self.cli_delete(base_path + ['area', area0])
+
+        self.cli_commit()
+
+        # Verify FRR ospfd configuration
+        frrconfig = self.getFRRconfig('router ospf', daemon=PROCESS_NAME)
+        self.assertIn(f'router ospf', frrconfig)
+        self.assertIn(f' network {network} area {area1}', frrconfig)
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

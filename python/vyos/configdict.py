@@ -1,4 +1,4 @@
-# Copyright 2019-2022 VyOS maintainers and contributors <maintainers@vyos.io>
+# Copyright 2019-2024 VyOS maintainers and contributors <maintainers@vyos.io>
 #
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
@@ -104,6 +104,10 @@ def list_diff(first, second):
     return [item for item in first if item not in second]
 
 def is_node_changed(conf, path):
+   """
+   Check if any key under path has been changed and return True.
+   If nothing changed, return false
+   """
    from vyos.configdiff import get_config_diff
    D = get_config_diff(conf, key_mangling=('-', '_'))
    return D.is_node_changed(path)
@@ -139,17 +143,30 @@ def leaf_node_changed(conf, path):
 
     return None
 
-def node_changed(conf, path, key_mangling=None, recursive=False):
+def node_changed(conf, path, key_mangling=None, recursive=False, expand_nodes=None) -> list:
     """
-    Check if a leaf node was altered. If it has been altered - values has been
-    changed, or it was added/removed, we will return the old value. If nothing
-    has been changed, None is returned
+    Check if node under path (or anything under path if recursive=True) was changed. By default
+    we only check if a node or subnode (recursive) was deleted from path. If expand_nodes
+    is set to Diff.ADD we can also check if something was added to the path.
+
+    If nothing changed, an empty list is returned.
     """
-    from vyos.configdiff import get_config_diff, Diff
+    from vyos.configdiff import get_config_diff
+    from vyos.configdiff import Diff
+    # to prevent circular dependencies we assign the default here
+    if not expand_nodes: expand_nodes = Diff.DELETE
     D = get_config_diff(conf, key_mangling)
-    # get_child_nodes() will return dict_keys(), mangle this into a list with PEP448
-    keys = D.get_child_nodes_diff(path, expand_nodes=Diff.DELETE, recursive=recursive)['delete'].keys()
-    return list(keys)
+    # get_child_nodes_diff() will return dict_keys()
+    tmp = D.get_child_nodes_diff(path, expand_nodes=expand_nodes, recursive=recursive)
+    output = []
+    if expand_nodes & Diff.DELETE:
+        output.extend(list(tmp['delete'].keys()))
+    if expand_nodes & Diff.ADD:
+        output.extend(list(tmp['add'].keys()))
+
+    # remove duplicate keys from list, this happens when a node (e.g. description) is altered
+    output = list(dict.fromkeys(output))
+    return output
 
 def get_removed_vlans(conf, path, dict):
     """
@@ -186,8 +203,6 @@ def is_member(conf, interface, intftype=None):
     empty -> Interface is not a member
     key -> Interface is a member of this interface
     """
-    from vyos.ifconfig import Section
-
     ret_val = {}
     intftypes = ['bonding', 'bridge']
 
@@ -410,7 +425,7 @@ def get_pppoe_interfaces(conf, vrf=None):
 
     return pppoe_interfaces
 
-def get_interface_dict(config, base, ifname='', recursive_defaults=True):
+def get_interface_dict(config, base, ifname='', recursive_defaults=True, with_pki=False):
     """
     Common utility function to retrieve and mangle the interfaces configuration
     from the CLI input nodes. All interfaces have a common base where value
@@ -442,7 +457,8 @@ def get_interface_dict(config, base, ifname='', recursive_defaults=True):
                                       get_first_key=True,
                                       no_tag_node_value_mangle=True,
                                       with_defaults=True,
-                                      with_recursive_defaults=recursive_defaults)
+                                      with_recursive_defaults=recursive_defaults,
+                                      with_pki=with_pki)
 
         # If interface does not request an IPv4 DHCP address there is no need
         # to keep the dhcp-options key
@@ -606,7 +622,7 @@ def get_vlan_ids(interface):
 
     return vlan_ids
 
-def get_accel_dict(config, base, chap_secrets):
+def get_accel_dict(config, base, chap_secrets, with_pki=False):
     """
     Common utility function to retrieve and mangle the Accel-PPP configuration
     from different CLI input nodes. All Accel-PPP services have a common base
@@ -615,16 +631,17 @@ def get_accel_dict(config, base, chap_secrets):
 
     Return a dictionary with the necessary interface config keys.
     """
-    from vyos.utils.system import get_half_cpus
+    from vyos.utils.cpu import get_core_count
     from vyos.template import is_ipv4
 
     dict = config.get_config_dict(base, key_mangling=('-', '_'),
                                   get_first_key=True,
                                   no_tag_node_value_mangle=True,
-                                  with_recursive_defaults=True)
+                                  with_recursive_defaults=True,
+                                  with_pki=with_pki)
 
     # set CPUs cores to process requests
-    dict.update({'thread_count' : get_half_cpus()})
+    dict.update({'thread_count' : get_core_count()})
     # we need to store the path to the secrets file
     dict.update({'chap_secrets_file' : chap_secrets})
 

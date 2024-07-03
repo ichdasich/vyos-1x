@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2021-2023 VyOS maintainers and contributors
+# Copyright (C) 2021-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -91,6 +91,8 @@ def get_config(config=None):
     for protocol in ['babel', 'bgp', 'connected', 'isis', 'kernel', 'rip', 'static']:
         if dict_search(f'redistribute.{protocol}', ospf) is None:
             del default_values['redistribute'][protocol]
+    if not bool(default_values['redistribute']):
+        del default_values['redistribute']
 
     for interface in ospf.get('interface', []):
         # We need to reload the defaults on every pass b/c of
@@ -125,6 +127,7 @@ def verify(ospf):
 
     # Validate if configured Access-list exists
     if 'area' in ospf:
+          networks = []
           for area, area_config in ospf['area'].items():
               if 'import_list' in area_config:
                   acl_import = area_config['import_list']
@@ -132,6 +135,12 @@ def verify(ospf):
               if 'export_list' in area_config:
                   acl_export = area_config['export_list']
                   if acl_export: verify_access_list(acl_export, ospf)
+
+              if 'network' in area_config:
+                  for network in area_config['network']:
+                      if network in networks:
+                          raise ConfigError(f'Network "{network}" already defined in different area!')
+                      networks.append(network)
 
     if 'interface' in ospf:
         for interface, interface_config in ospf['interface'].items():
@@ -212,6 +221,19 @@ def verify(ospf):
                 if ("explicit_null" in prefix_config['index']) and ("no_php_flag" in prefix_config['index']):
                     raise ConfigError(f'Segment routing prefix {prefix} cannot have both explicit-null '\
                                       f'and no-php-flag configured at the same time.')
+
+    # Check for index ranges being larger than the segment routing global block
+    if dict_search('segment_routing.global_block', ospf):
+        g_high_label_value = dict_search('segment_routing.global_block.high_label_value', ospf)
+        g_low_label_value = dict_search('segment_routing.global_block.low_label_value', ospf)
+        g_label_difference = int(g_high_label_value) - int(g_low_label_value)
+        if dict_search('segment_routing.prefix', ospf):
+            for prefix, prefix_config in ospf['segment_routing']['prefix'].items():
+                if 'index' in prefix_config:
+                    index_size = ospf['segment_routing']['prefix'][prefix]['index']['value']
+                    if int(index_size) > int(g_label_difference):
+                        raise ConfigError(f'Segment routing prefix {prefix} cannot have an '\
+                                          f'index base size larger than the SRGB label base.')
 
     # Check route summarisation
     if 'summary_address' in ospf:

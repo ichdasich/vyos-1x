@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2021-2023 VyOS maintainers and contributors
+# Copyright (C) 2021-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -25,6 +25,7 @@ from cryptography import x509
 from cryptography.x509.oid import ExtendedKeyUsageOID
 
 from vyos.config import Config
+from vyos.config import config_dict_mangle_acme
 from vyos.pki import encode_certificate, encode_public_key, encode_private_key, encode_dh_parameters
 from vyos.pki import get_certificate_fingerprint
 from vyos.pki import create_certificate, create_certificate_request, create_certificate_revocation_list
@@ -79,9 +80,14 @@ def get_config_certificate(name=None):
         if not conf.exists(base + ['private', 'key']) or not conf.exists(base + ['certificate']):
             return False
 
-    return conf.get_config_dict(base, key_mangling=('-', '_'),
+    pki = conf.get_config_dict(base, key_mangling=('-', '_'),
                                 get_first_key=True,
                                 no_tag_node_value_mangle=True)
+    if pki:
+        for certificate in pki:
+            pki[certificate] = config_dict_mangle_acme(certificate, pki[certificate])
+
+    return pki
 
 def get_certificate_ca(cert, ca_certs):
     # Find CA certificate for given certificate
@@ -300,7 +306,7 @@ def parse_san_string(san_string):
             output.append(ipaddress.IPv4Address(value))
         elif tag == 'ipv6':
             output.append(ipaddress.IPv6Address(value))
-        elif tag == 'dns':
+        elif tag == 'dns' or tag == 'rfc822':
             output.append(value)
     return output
 
@@ -318,7 +324,7 @@ def generate_certificate_request(private_key=None, key_type=None, return_request
     subject_alt_names = None
 
     if ask_san and ask_yes_no('Do you want to configure Subject Alternative Names?'):
-        print("Enter alternative names in a comma separate list, example: ipv4:1.1.1.1,ipv6:fe80::1,dns:vyos.net")
+        print("Enter alternative names in a comma separate list, example: ipv4:1.1.1.1,ipv6:fe80::1,dns:vyos.net,rfc822:user@vyos.net")
         san_string = ask_input('Enter Subject Alternative Names:')
         subject_alt_names = parse_san_string(san_string)
 
@@ -420,11 +426,15 @@ def generate_ca_certificate_sign(name, ca_name, install=False, file=False):
         return None
 
     cert = generate_certificate(cert_req, ca_cert, ca_private_key, is_ca=True, is_sub_ca=True)
-    passphrase = ask_passphrase()
+
+    passphrase = None
+    if private_key is not None:
+        passphrase = ask_passphrase()
 
     if not install and not file:
         print(encode_certificate(cert))
-        print(encode_private_key(private_key, passphrase=passphrase))
+        if private_key is not None:
+            print(encode_private_key(private_key, passphrase=passphrase))
         return None
 
     if install:
@@ -432,7 +442,8 @@ def generate_ca_certificate_sign(name, ca_name, install=False, file=False):
 
     if file:
         write_file(f'{name}.pem', encode_certificate(cert))
-        write_file(f'{name}.key', encode_private_key(private_key, passphrase=passphrase))
+        if private_key is not None:
+            write_file(f'{name}.key', encode_private_key(private_key, passphrase=passphrase))
 
 def generate_certificate_sign(name, ca_name, install=False, file=False):
     ca_dict = get_config_ca_certificate(ca_name)
@@ -486,11 +497,15 @@ def generate_certificate_sign(name, ca_name, install=False, file=False):
         return None
 
     cert = generate_certificate(cert_req, ca_cert, ca_private_key, is_ca=False)
-    passphrase = ask_passphrase()
+    
+    passphrase = None
+    if private_key is not None:
+        passphrase = ask_passphrase()
 
     if not install and not file:
         print(encode_certificate(cert))
-        print(encode_private_key(private_key, passphrase=passphrase))
+        if private_key is not None:
+            print(encode_private_key(private_key, passphrase=passphrase))
         return None
 
     if install:
@@ -498,7 +513,8 @@ def generate_certificate_sign(name, ca_name, install=False, file=False):
 
     if file:
         write_file(f'{name}.pem', encode_certificate(cert))
-        write_file(f'{name}.key', encode_private_key(private_key, passphrase=passphrase))
+        if private_key is not None:
+            write_file(f'{name}.key', encode_private_key(private_key, passphrase=passphrase))
 
 def generate_certificate_selfsign(name, install=False, file=False):
     private_key, key_type = generate_private_key()
@@ -870,7 +886,7 @@ def show_certificate_authority(name=None, pem=False):
     print("Certificate Authorities:")
     print(tabulate.tabulate(data, headers))
 
-def show_certificate(name=None, pem=False):
+def show_certificate(name=None, pem=False, fingerprint_hash=None):
     headers = ['Name', 'Type', 'Subject CN', 'Issuer CN', 'Issued', 'Expiry', 'Revoked', 'Private Key', 'CA Present']
     data = []
     certs = get_config_certificate()
@@ -890,6 +906,9 @@ def show_certificate(name=None, pem=False):
 
             if name and pem:
                 print(encode_certificate(cert))
+                return
+            elif name and fingerprint_hash:
+                print(get_certificate_fingerprint(cert, fingerprint_hash))
                 return
 
             ca_name = get_certificate_ca(cert, ca_certs)
@@ -916,12 +935,6 @@ def show_certificate(name=None, pem=False):
 
     print("Certificates:")
     print(tabulate.tabulate(data, headers))
-
-def show_certificate_fingerprint(name, hash):
-    cert = get_config_certificate(name=name)
-    cert = load_certificate(cert['certificate'])
-
-    print(get_certificate_fingerprint(cert, hash))
 
 def show_crl(name=None, pem=False):
     headers = ['CA Name', 'Updated', 'Revokes']
@@ -1068,12 +1081,14 @@ if __name__ == '__main__':
                 if args.fingerprint is None:
                     show_certificate(None if args.certificate == 'all' else args.certificate, args.pem)
                 else:
-                    show_certificate_fingerprint(args.certificate, args.fingerprint)
+                    show_certificate(args.certificate, fingerprint_hash=args.fingerprint)
             elif args.crl:
                 show_crl(None if args.crl == 'all' else args.crl, args.pem)
             else:
                 show_certificate_authority()
+                print('\n')
                 show_certificate()
+                print('\n')
                 show_crl()
     except KeyboardInterrupt:
         print("Aborted")

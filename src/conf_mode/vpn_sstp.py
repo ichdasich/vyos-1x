@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2018-2022 VyOS maintainers and contributors
+# Copyright (C) 2018-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -20,14 +20,19 @@ from sys import exit
 
 from vyos.config import Config
 from vyos.configdict import get_accel_dict
-from vyos.configdict import dict_merge
-from vyos.configverify import verify_accel_ppp_base_service
+from vyos.configverify import verify_pki_certificate
+from vyos.configverify import verify_pki_ca_certificate
 from vyos.pki import wrap_certificate
 from vyos.pki import wrap_private_key
 from vyos.template import render
 from vyos.utils.process import call
 from vyos.utils.network import check_port_availability
 from vyos.utils.dict import dict_search
+from vyos.accel_ppp_util import verify_accel_ppp_name_servers
+from vyos.accel_ppp_util import verify_accel_ppp_wins_servers
+from vyos.accel_ppp_util import verify_accel_ppp_authentication
+from vyos.accel_ppp_util import verify_accel_ppp_ip_pool
+from vyos.accel_ppp_util import get_pools_in_order
 from vyos.utils.network import is_listen_port_bind_service
 from vyos.utils.file import write_file
 from vyos import ConfigError
@@ -42,6 +47,7 @@ cert_file_path = os.path.join(cfg_dir, 'sstp-cert.pem')
 cert_key_path = os.path.join(cfg_dir, 'sstp-cert.key')
 ca_cert_file_path = os.path.join(cfg_dir, 'sstp-ca.pem')
 
+
 def get_config(config=None):
     if config:
         conf = config
@@ -52,13 +58,14 @@ def get_config(config=None):
         return None
 
     # retrieve common dictionary keys
-    sstp = get_accel_dict(conf, base, sstp_chap_secrets)
-    if sstp:
-        sstp['pki'] = conf.get_config_dict(['pki'], key_mangling=('-', '_'),
-                                           get_first_key=True,
-                                           no_tag_node_value_mangle=True)
+    sstp = get_accel_dict(conf, base, sstp_chap_secrets, with_pki=True)
+    if dict_search('client_ip_pool', sstp):
+        # Multiple named pools require ordered values T5099
+        sstp['ordered_named_pools'] = get_pools_in_order(dict_search('client_ip_pool', sstp))
 
+    sstp['server_type'] = 'sstp'
     return sstp
+
 
 def verify(sstp):
     if not sstp:
@@ -70,53 +77,22 @@ def verify(sstp):
             not is_listen_port_bind_service(int(port), 'accel-pppd'):
         raise ConfigError(f'"{proto}" port "{port}" is used by another service')
 
-    verify_accel_ppp_base_service(sstp)
-
-    if 'client_ip_pool' not in sstp and 'client_ipv6_pool' not in sstp:
-        raise ConfigError('Client IP subnet required')
-
-    #
-    # SSL certificate checks
-    #
-    if not sstp['pki']:
-        raise ConfigError('PKI is not configured')
+    verify_accel_ppp_authentication(sstp)
+    verify_accel_ppp_ip_pool(sstp)
+    verify_accel_ppp_name_servers(sstp)
+    verify_accel_ppp_wins_servers(sstp)
 
     if 'ssl' not in sstp:
-        raise ConfigError('SSL missing on SSTP config')
+        raise ConfigError('SSL missing on SSTP config!')
 
-    ssl = sstp['ssl']
+    if 'certificate' not in sstp['ssl']:
+        raise ConfigError('SSL certificate missing on SSTP config!')
+    verify_pki_certificate(sstp, sstp['ssl']['certificate'])
 
-    # CA
-    if 'ca_certificate' not in ssl:
-        raise ConfigError('SSL CA certificate missing on SSTP config')
+    if 'ca_certificate' not in sstp['ssl']:
+        raise ConfigError('SSL CA certificate missing on SSTP config!')
+    verify_pki_ca_certificate(sstp, sstp['ssl']['ca_certificate'])
 
-    ca_name = ssl['ca_certificate']
-
-    if ca_name not in sstp['pki']['ca']:
-        raise ConfigError('Invalid CA certificate on SSTP config')
-
-    if 'certificate' not in sstp['pki']['ca'][ca_name]:
-        raise ConfigError('Missing certificate data for CA certificate on SSTP config')
-
-    # Certificate
-    if 'certificate' not in ssl:
-        raise ConfigError('SSL certificate missing on SSTP config')
-
-    cert_name = ssl['certificate']
-
-    if cert_name not in sstp['pki']['certificate']:
-        raise ConfigError('Invalid certificate on SSTP config')
-
-    pki_cert = sstp['pki']['certificate'][cert_name]
-
-    if 'certificate' not in pki_cert:
-        raise ConfigError('Missing certificate data for certificate on SSTP config')
-
-    if 'private' not in pki_cert or 'key' not in pki_cert['private']:
-        raise ConfigError('Missing private key for certificate on SSTP config')
-
-    if 'password_protected' in pki_cert['private']:
-        raise ConfigError('Encrypted private key is not supported on SSTP config')
 
 def generate(sstp):
     if not sstp:
@@ -143,16 +119,17 @@ def generate(sstp):
 
     return sstp
 
+
 def apply(sstp):
+    systemd_service = 'accel-ppp@sstp.service'
     if not sstp:
-        call('systemctl stop accel-ppp@sstp.service')
+        call(f'systemctl stop {systemd_service}')
         for file in [sstp_chap_secrets, sstp_conf]:
             if os.path.exists(file):
                 os.unlink(file)
-
         return None
 
-    call('systemctl restart accel-ppp@sstp.service')
+    call(f'systemctl reload-or-restart {systemd_service}')
 
 
 if __name__ == '__main__':

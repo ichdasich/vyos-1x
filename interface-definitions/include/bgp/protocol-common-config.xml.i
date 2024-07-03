@@ -120,6 +120,7 @@
         #include <include/bgp/afi-rd.xml.i>
         #include <include/bgp/afi-route-map-vpn.xml.i>
         #include <include/bgp/afi-route-target-vpn.xml.i>
+        #include <include/bgp/afi-nexthop-vpn-export.xml.i>
         <node name="redistribute">
           <properties>
             <help>Redistribute routes from other protocols into BGP</help>
@@ -188,6 +189,7 @@
             </leafNode>
           </children>
         </node>
+        #include <include/bgp/afi-sid.xml.i>
       </children>
     </node>
     <node name="ipv4-multicast">
@@ -495,6 +497,7 @@
         #include <include/bgp/afi-rd.xml.i>
         #include <include/bgp/afi-route-map-vpn.xml.i>
         #include <include/bgp/afi-route-target-vpn.xml.i>
+        #include <include/bgp/afi-nexthop-vpn-export.xml.i>
         <node name="redistribute">
           <properties>
             <help>Redistribute routes from other protocols into BGP</help>
@@ -555,6 +558,7 @@
             </leafNode>
           </children>
         </node>
+        #include <include/bgp/afi-sid.xml.i>
       </children>
     </node>
     <node name="ipv6-multicast">
@@ -890,6 +894,30 @@
             </leafNode>
           </children>
         </node>
+        <node name="mac-vrf">
+          <properties>
+            <help>EVPN MAC-VRF</help>
+          </properties>
+          <children>
+            <leafNode name="soo">
+              <properties>
+                <help>Site-of-Origin extended community</help>
+                <valueHelp>
+                  <format>ASN:NN</format>
+                  <description>based on autonomous system number in format &lt;0-65535:0-4294967295&gt;</description>
+                </valueHelp>
+                <valueHelp>
+                  <format>IP:NN</format>
+                  <description>Based on a router-id IP address in format &lt;IP:0-65535&gt;</description>
+                </valueHelp>
+                <constraint>
+                  <validator name="bgp-extended-community"/>
+                </constraint>
+                <constraintErrorMessage>Should be in form: ASN:NN or IPADDR:NN where ASN is autonomous system number</constraintErrorMessage>
+              </properties>
+            </leafNode>
+          </children>
+        </node>
         <tagNode name="vni">
           <properties>
             <help>VXLAN Network Identifier</help>
@@ -907,6 +935,92 @@
         </tagNode>
       </children>
     </node>
+  </children>
+</node>
+<node name="bmp">
+  <properties>
+    <help>BGP Monitoring Protocol (BMP)</help>
+  </properties>
+  <children>
+    <leafNode name="mirror-buffer-limit">
+      <properties>
+        <help>Maximum memory used for buffered mirroring messages (in bytes)</help>
+        <valueHelp>
+          <format>u32:0-4294967294</format>
+          <description>Limit in bytes</description>
+        </valueHelp>
+        <constraint>
+          <validator name="numeric" argument="--range 0-4294967294"/>
+        </constraint>
+      </properties>
+    </leafNode>
+    <tagNode name="target">
+      <properties>
+        <help>BMP target</help>
+      </properties>
+      <children>
+        #include <include/address-ipv4-ipv6-single.xml.i>
+        #include <include/port-number.xml.i>
+        <leafNode name="port">
+          <defaultValue>5000</defaultValue>
+        </leafNode>
+        <leafNode name="min-retry">
+          <properties>
+            <help>Minimum connection retry interval (in milliseconds)</help>
+            <valueHelp>
+              <format>u32:100-86400000</format>
+              <description>Minimum connection retry interval</description>
+            </valueHelp>
+            <constraint>
+              <validator name="numeric" argument="--range 100-86400000"/>
+            </constraint>
+          </properties>
+          <defaultValue>1000</defaultValue>
+        </leafNode>
+        <leafNode name="max-retry">
+          <properties>
+            <help>Maximum connection retry interval</help>
+            <valueHelp>
+              <format>u32:100-4294967295</format>
+              <description>Maximum connection retry interval</description>
+            </valueHelp>
+            <constraint>
+              <validator name="numeric" argument="--range 100-86400000"/>
+            </constraint>
+          </properties>
+          <defaultValue>2000</defaultValue>
+        </leafNode>
+        <leafNode name="mirror">
+          <properties>
+            <help>Send BMP route mirroring messages</help>
+            <valueless/>
+          </properties>
+        </leafNode>
+        <node name="monitor">
+          <properties>
+            <help>Send BMP route monitoring messages</help>
+          </properties>
+          <children>
+            <node name="ipv4-unicast">
+              <properties>
+                <help>Address family IPv4 unicast</help>
+              </properties>
+              <children>
+                #include <include/bgp/bmp-monitor-afi-policy.xml.i>
+              </children>
+            </node>
+            <node name="ipv6-unicast">
+              <properties>
+                <help>Address family IPv6 unicast</help>
+              </properties>
+              <children>
+                #include <include/bgp/bmp-monitor-afi-policy.xml.i>
+              </children>
+            </node>
+          </children>
+        </node>
+      </children>
+    </tagNode>
   </children>
 </node>
 <tagNode name="interface">
@@ -1129,6 +1243,18 @@
     <help>BGP parameters</help>
   </properties>
   <children>
+    <leafNode name="allow-martian-nexthop">
+      <properties>
+        <help>Allow Martian nexthops to be received in the NLRI from a peer</help>
+        <valueless/>
+      </properties>
+    </leafNode>
+    <leafNode name="disable-ebgp-connected-route-check">
+      <properties>
+        <help>Disable checking if nexthop is connected on eBGP session</help>
+        <valueless/>
+      </properties>
+    </leafNode>
     <leafNode name="always-compare-med">
       <properties>
         <help>Always compare MEDs from different neighbors</help>
@@ -1486,6 +1612,35 @@
         <valueless/>
       </properties>
     </leafNode>
+    <leafNode name="no-hard-administrative-reset">
+      <properties>
+        <help>Do not send hard reset CEASE Notification for 'Administrative Reset'</help>
+        <valueless/>
+      </properties>
+    </leafNode>
+    <leafNode name="labeled-unicast">
+      <properties>
+        <help>BGP Labeled-unicast options</help>
+        <completionHelp>
+          <list>explicit-null ipv4-explicit-null ipv6-explicit-null</list>
+        </completionHelp>
+        <valueHelp>
+          <format>explicit-null</format>
+          <description>Use explicit-null label values for all local prefixes</description>
+        </valueHelp>
+        <valueHelp>
+          <format>ipv4-explicit-null</format>
+          <description>Use IPv4 explicit-null label value for IPv4 local prefixes</description>
+        </valueHelp>
+        <valueHelp>
+          <format>ipv6-explicit-null</format>
+          <description>Use IPv6 explicit-null label value for IPv4 local prefixes</description>
+        </valueHelp>
+        <constraint>
+          <regex>(explicit-null|ipv4-explicit-null|ipv6-explicit-null)</regex>
+        </constraint>
+      </properties>
+    </leafNode>
     <leafNode name="log-neighbor-changes">
       <properties>
         <help>Log neighbor up/down changes and reset reason</help>
@@ -1612,8 +1767,10 @@
       </properties>
       <children>
         #include <include/bgp/neighbor-afi-ipv4-unicast.xml.i>
+        #include <include/bgp/neighbor-afi-ipv4-labeled-unicast.xml.i>
         #include <include/bgp/neighbor-afi-ipv4-vpn.xml.i>
         #include <include/bgp/neighbor-afi-ipv6-unicast.xml.i>
+        #include <include/bgp/neighbor-afi-ipv6-labeled-unicast.xml.i>
         #include <include/bgp/neighbor-afi-ipv6-vpn.xml.i>
         #include <include/bgp/neighbor-afi-l2vpn-evpn.xml.i>
       </children>
@@ -1639,6 +1796,66 @@
     #include <include/port-number.xml.i>
   </children>
 </tagNode>
+<node name="srv6">
+  <properties>
+    <help>Segment-Routing SRv6 configuration</help>
+  </properties>
+  <children>
+    <leafNode name="locator">
+      <properties>
+        <help>Specify SRv6 locator</help>
+        <valueHelp>
+          <format>txt</format>
+          <description>SRv6 locator name</description>
+        </valueHelp>
+        <constraint>
+          #include <include/constraint/alpha-numeric-hyphen-underscore.xml.i>
+        </constraint>
+      </properties>
+    </leafNode>
+  </children>
+</node>
+<node name="sid">
+  <properties>
+    <help>SID value for VRF</help>
+  </properties>
+  <children>
+    <node name="vpn">
+      <properties>
+        <help>Between current VRF and VPN</help>
+      </properties>
+      <children>
+        <node name="per-vrf">
+          <properties>
+            <help>SID per-VRF (both IPv4 and IPv6 address families)</help>
+          </properties>
+          <children>
+            <leafNode name="export">
+              <properties>
+                <help>For routes leaked from current VRF to VPN</help>
+                <completionHelp>
+                  <list>auto</list>
+                </completionHelp>
+                <valueHelp>
+                  <format>u32:1-1048575</format>
+                  <description>SID allocation index</description>
+                </valueHelp>
+                <valueHelp>
+                  <format>auto</format>
+                  <description>Automatically assign a label</description>
+                </valueHelp>
+                <constraint>
+                  <regex>auto</regex>
+                  <validator name="numeric" argument="--range 1-1048575"/>
+                </constraint>
+              </properties>
+            </leafNode>
+          </children>
+        </node>
+      </children>
+    </node>
+  </children>
+</node>
 <node name="timers">
   <properties>
     <help>BGP protocol timers</help>

@@ -19,6 +19,7 @@ from glob import glob
 
 from vyos.base import Warning
 from vyos.ethtool import Ethtool
+from vyos.ifconfig import Section
 from vyos.ifconfig.interface import Interface
 from vyos.utils.dict import dict_search
 from vyos.utils.file import read_file
@@ -127,6 +128,10 @@ class EthernetIf(Interface):
             # interface is placed in A/D state when removed from config! It
             # will remain visible for the operating system.
             self.set_admin_state('down')
+
+        # Remove all VLAN subinterfaces - filter with the VLAN dot
+        for vlan in [x for x in Section.interfaces(self.iftype) if x.startswith(f'{self.ifname}.')]:
+            Interface(vlan).remove()
 
         super().remove()
 
@@ -416,7 +421,7 @@ class EthernetIf(Interface):
         self.set_gso(dict_search('offload.gso', config) != None)
 
         # GSO (generic segmentation offload)
-        self.set_hw_tc_offload(dict_search('offload.hw-tc-offload', config) != None)
+        self.set_hw_tc_offload(dict_search('offload.hw_tc_offload', config) != None)
 
         # LRO (large receive offload)
         self.set_lro(dict_search('offload.lro', config) != None)

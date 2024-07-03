@@ -1,4 +1,4 @@
-# Copyright 2019-2023 VyOS maintainers and contributors <maintainers@vyos.io>
+# Copyright 2019-2024 VyOS maintainers and contributors <maintainers@vyos.io>
 #
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
@@ -25,6 +25,14 @@ from vyos.utils.file import makedir
 from vyos.utils.permission import chmod
 from vyos.utils.permission import chown
 
+# We use a mutable global variable for the default template directory
+# to make it possible to call scripts from this repository
+# outside of live VyOS systems.
+# If something (like the image build scripts)
+# want to call a script, they can modify the default location
+# to the repository path.
+DEFAULT_TEMPLATE_DIR = directories["templates"]
+
 # Holds template filters registered via register_filter()
 _FILTERS = {}
 _TESTS = {}
@@ -32,8 +40,10 @@ _TESTS = {}
 # reuse Environments with identical settings to improve performance
 @functools.lru_cache(maxsize=2)
 def _get_environment(location=None):
+    from os import getenv
+
     if location is None:
-        loc_loader=FileSystemLoader(directories["templates"])
+        loc_loader=FileSystemLoader(DEFAULT_TEMPLATE_DIR)
     else:
         loc_loader=FileSystemLoader(location)
     env = Environment(
@@ -294,7 +304,8 @@ def network_from_ipv4(address):
 @register_filter('is_interface')
 def is_interface(interface):
     """ Check if parameter is a valid local interface name """
-    return os.path.exists(f'/sys/class/net/{interface}')
+    from vyos.utils.network import interface_exists
+    return interface_exists(interface)
 
 @register_filter('is_ip')
 def is_ip(addr):
@@ -316,20 +327,15 @@ def is_ipv6(text):
     except: return False
 
 @register_filter('first_host_address')
-def first_host_address(text):
+def first_host_address(prefix):
     """ Return first usable (host) IP address from given prefix.
     Example:
       - 10.0.0.0/24 -> 10.0.0.1
       - 2001:db8::/64 -> 2001:db8::
     """
     from ipaddress import ip_interface
-    from ipaddress import IPv4Network
-    from ipaddress import IPv6Network
-
-    addr = ip_interface(text)
-    if addr.version == 4:
-        return str(addr.ip +1)
-    return str(addr.ip)
+    tmp = ip_interface(prefix).network
+    return str(tmp.network_address +1)
 
 @register_filter('last_host_address')
 def last_host_address(text):
@@ -519,10 +525,17 @@ def get_esp_ike_cipher(group_config, ike_group=None):
     return ciphers
 
 @register_filter('get_uuid')
-def get_uuid(interface):
+def get_uuid(seed):
     """ Get interface IP addresses"""
-    from uuid import uuid1
-    return uuid1()
+    if seed:
+        from hashlib import md5
+        from uuid import UUID
+        tmp = md5()
+        tmp.update(seed.encode('utf-8'))
+        return str(UUID(tmp.hexdigest()))
+    else:
+        from uuid import uuid1
+        return uuid1()
 
 openvpn_translate = {
     'des': 'des-cbc',
@@ -584,7 +597,7 @@ def nft_default_rule(fw_conf, fw_name, family):
     default_action = fw_conf['default_action']
     #family = 'ipv6' if ipv6 else 'ipv4'
 
-    if 'enable_default_log' in fw_conf:
+    if 'default_log' in fw_conf:
         action_suffix = default_action[:1].upper()
         output.append(f'log prefix "[{family}-{fw_name[:19]}-default-{action_suffix}]"')
 
@@ -602,7 +615,7 @@ def nft_default_rule(fw_conf, fw_name, family):
 def nft_state_policy(conf, state):
     out = [f'ct state {state}']
 
-    if 'log' in conf and 'enable' in conf['log']:
+    if 'log' in conf:
         log_state = state[:3].upper()
         log_action = (conf['action'] if 'action' in conf else 'accept')[:1].upper()
         out.append(f'log prefix "[STATE-POLICY-{log_state}-{log_action}]"')
@@ -664,8 +677,8 @@ def nat_static_rule(rule_conf, rule_id, nat_type):
     from vyos.nat import parse_nat_static_rule
     return parse_nat_static_rule(rule_conf, rule_id, nat_type)
 
-@register_filter('conntrack_ignore_rule')
-def conntrack_ignore_rule(rule_conf, rule_id, ipv6=False):
+@register_filter('conntrack_rule')
+def conntrack_rule(rule_conf, rule_id, action, ipv6=False):
     ip_prefix = 'ip6' if ipv6 else 'ip'
     def_suffix = '6' if ipv6 else ''
     output = []
@@ -676,11 +689,15 @@ def conntrack_ignore_rule(rule_conf, rule_id, ipv6=False):
             output.append(f'iifname {ifname}')
 
     if 'protocol' in rule_conf:
-        proto = rule_conf['protocol']
+        if action != 'timeout':
+            proto = rule_conf['protocol']
+        else:
+            for protocol, protocol_config in rule_conf['protocol'].items():
+                proto = protocol
         output.append(f'meta l4proto {proto}')
 
     tcp_flags = dict_search_args(rule_conf, 'tcp', 'flags')
-    if tcp_flags:
+    if tcp_flags and action != 'timeout':
         from vyos.firewall import parse_tcp_flags
         output.append(parse_tcp_flags(tcp_flags))
 
@@ -743,10 +760,23 @@ def conntrack_ignore_rule(rule_conf, rule_id, ipv6=False):
 
                     output.append(f'{proto} {prefix}port {operator} @P_{group_name}')
 
-    output.append('counter notrack')
-    output.append(f'comment "ignore-{rule_id}"')
+    if action == 'ignore':
+        output.append('counter notrack')
+        output.append(f'comment "ignore-{rule_id}"')
+    else:
+        output.append(f'counter ct timeout set ct-timeout-{rule_id}')
+        output.append(f'comment "timeout-{rule_id}"')
 
     return " ".join(output)
+
+@register_filter('conntrack_ct_policy')
+def conntrack_ct_policy(protocol_conf):
+    output = []
+    for item in protocol_conf:
+        item_value = protocol_conf[item]
+        output.append(f'{item}: {item_value}')
+
+    return ", ".join(output)
 
 @register_filter('range_to_regex')
 def range_to_regex(num_range):
@@ -773,6 +803,138 @@ def range_to_regex(num_range):
 
     regex = range_to_regex(num_range)
     return f'({regex})'
+
+@register_filter('kea_address_json')
+def kea_address_json(addresses):
+    from json import dumps
+    from vyos.utils.network import is_addr_assigned
+
+    out = []
+
+    for address in addresses:
+        ifname = is_addr_assigned(address, return_ifname=True, include_vrf=True)
+
+        if not ifname:
+            continue
+
+        out.append(f'{ifname}/{address}')
+
+    return dumps(out)
+
+@register_filter('kea_high_availability_json')
+def kea_high_availability_json(config):
+    from json import dumps
+
+    source_addr = config['source_address']
+    remote_addr = config['remote']
+    ha_mode = 'hot-standby' if config['mode'] == 'active-passive' else 'load-balancing'
+    ha_role = config['status']
+
+    if ha_role == 'primary':
+        peer1_role = 'primary'
+        peer2_role = 'standby' if ha_mode == 'hot-standby' else 'secondary'
+    else:
+        peer1_role = 'standby' if ha_mode == 'hot-standby' else 'secondary'
+        peer2_role = 'primary'
+
+    data = {
+        'this-server-name': os.uname()[1],
+        'mode': ha_mode,
+        'heartbeat-delay': 10000,
+        'max-response-delay': 10000,
+        'max-ack-delay': 5000,
+        'max-unacked-clients': 0,
+        'peers': [
+        {
+            'name': os.uname()[1],
+            'url': f'http://{source_addr}:647/',
+            'role': peer1_role,
+            'auto-failover': True
+        },
+        {
+            'name': config['name'],
+            'url': f'http://{remote_addr}:647/',
+            'role': peer2_role,
+            'auto-failover': True
+        }]
+    }
+
+    if 'ca_cert_file' in config:
+        data['trust-anchor'] = config['ca_cert_file']
+
+    if 'cert_file' in config:
+        data['cert-file'] = config['cert_file']
+
+    if 'cert_key_file' in config:
+        data['key-file'] = config['cert_key_file']
+
+    return dumps(data)
+
+@register_filter('kea_shared_network_json')
+def kea_shared_network_json(shared_networks):
+    from vyos.kea import kea_parse_options
+    from vyos.kea import kea_parse_subnet
+    from json import dumps
+    out = []
+
+    for name, config in shared_networks.items():
+        if 'disable' in config:
+            continue
+
+        network = {
+            'name': name,
+            'authoritative': ('authoritative' in config),
+            'subnet4': []
+        }
+
+        if 'option' in config:
+            network['option-data'] = kea_parse_options(config['option'])
+
+            if 'bootfile_name' in config['option']:
+                network['boot-file-name'] = config['option']['bootfile_name']
+
+            if 'bootfile_server' in config['option']:
+                network['next-server'] = config['option']['bootfile_server']
+
+        if 'subnet' in config:
+            for subnet, subnet_config in config['subnet'].items():
+                if 'disable' in subnet_config:
+                    continue
+                network['subnet4'].append(kea_parse_subnet(subnet, subnet_config))
+
+        out.append(network)
+
+    return dumps(out, indent=4)
+
+@register_filter('kea6_shared_network_json')
+def kea6_shared_network_json(shared_networks):
+    from vyos.kea import kea6_parse_options
+    from vyos.kea import kea6_parse_subnet
+    from json import dumps
+    out = []
+
+    for name, config in shared_networks.items():
+        if 'disable' in config:
+            continue
+
+        network = {
+            'name': name,
+            'subnet6': []
+        }
+
+        if 'common_options' in config:
+            network['option-data'] = kea6_parse_options(config['common_options'])
+
+        if 'interface' in config:
+            network['interface'] = config['interface']
+
+        if 'subnet' in config:
+            for subnet, subnet_config in config['subnet'].items():
+                network['subnet6'].append(kea6_parse_subnet(subnet, subnet_config))
+
+        out.append(network)
+
+    return dumps(out, indent=4)
 
 @register_test('vyos_defined')
 def vyos_defined(value, test_value=None, var_type=None):

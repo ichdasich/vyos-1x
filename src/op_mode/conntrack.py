@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2022-2023 VyOS maintainers and contributors
+# Copyright (C) 2022-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -20,7 +20,6 @@ import xmltodict
 
 from tabulate import tabulate
 from vyos.utils.process import cmd
-from vyos.utils.process import run
 
 import vyos.opmode
 
@@ -63,7 +62,7 @@ def _get_raw_data(family):
 
 def _get_raw_statistics():
     entries = []
-    data = cmd('sudo conntrack -S')
+    data = cmd('sudo conntrack --stats')
     data = data.replace('  \t', '').split('\n')
     for entry in data:
         entries.append(entry.split())
@@ -71,8 +70,25 @@ def _get_raw_statistics():
 
 
 def get_formatted_statistics(entries):
-    headers = ["CPU", "Found", "Invalid", "Insert", "Insert fail", "Drop", "Early drop", "Errors", "Search restart"]
-    output = tabulate(entries, headers, numalign="left")
+    headers = [
+        "CPU",
+        "Found",
+        "Invalid",
+        "Insert",
+        "Insert fail",
+        "Drop",
+        "Early drop",
+        "Errors",
+        "Search restart",
+        "",
+        "",
+    ]
+    # Process each entry to extract and format the values after '='
+    processed_entries = [
+        [value.split('=')[-1] for value in entry]
+        for entry in entries
+    ]
+    output = tabulate(processed_entries, headers, numalign="left")
     return output
 
 
@@ -112,7 +128,8 @@ def get_formatted_output(dict_data):
                     proto = meta['layer4']['protoname']
             if direction == 'independent':
                 conn_id = meta['id']
-                timeout = meta['timeout']
+                # T6138 flowtable offload conntrack entries without 'timeout'
+                timeout = meta.get('timeout', 'n/a')
                 orig_src = f'{orig_src}:{orig_sport}' if orig_sport else orig_src
                 orig_dst = f'{orig_dst}:{orig_dport}' if orig_dport else orig_dst
                 reply_src = f'{reply_src}:{reply_sport}' if reply_sport else reply_src

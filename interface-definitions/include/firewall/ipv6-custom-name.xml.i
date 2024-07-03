@@ -8,7 +8,7 @@
   </properties>
   <children>
     #include <include/firewall/default-action.xml.i>
-    #include <include/firewall/enable-default-log.xml.i>
+    #include <include/firewall/default-log.xml.i>
     #include <include/generic-description.xml.i>
     <leafNode name="default-jump-target">
       <properties>
@@ -33,6 +33,8 @@
       <children>
         #include <include/firewall/common-rule-ipv6.xml.i>
         #include <include/firewall/inbound-interface.xml.i>
+        #include <include/firewall/match-ipsec.xml.i>
+        #include <include/firewall/offload-target.xml.i>
         #include <include/firewall/outbound-interface.xml.i>
       </children>
     </tagNode>

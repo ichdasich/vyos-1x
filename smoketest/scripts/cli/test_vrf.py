@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2020-2023 VyOS maintainers and contributors
+# Copyright (C) 2020-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -16,20 +16,18 @@
 
 import re
 import os
-import json
 import unittest
 
-from netifaces import interfaces
 from base_vyostest_shim import VyOSUnitTestSHIM
 
 from vyos.configsession import ConfigSessionError
 from vyos.ifconfig import Interface
 from vyos.ifconfig import Section
-from vyos.template import is_ipv4
-from vyos.utils.process import cmd
 from vyos.utils.file import read_file
 from vyos.utils.network import get_interface_config
 from vyos.utils.network import is_intf_addr_assigned
+from vyos.utils.network import interface_exists
+from vyos.utils.system import sysctl_read
 
 base_path = ['vrf']
 vrfs = ['red', 'green', 'blue', 'foo-bar', 'baz_foo']
@@ -52,12 +50,17 @@ class VRFTest(VyOSUnitTestSHIM.TestCase):
         # call base-classes classmethod
         super(VRFTest, cls).setUpClass()
 
+    def setUp(self):
+        # VRF strict_most ist always enabled
+        tmp = read_file('/proc/sys/net/vrf/strict_mode')
+        self.assertEqual(tmp, '1')
+
     def tearDown(self):
         # delete all VRFs
         self.cli_delete(base_path)
         self.cli_commit()
         for vrf in vrfs:
-            self.assertNotIn(vrf, interfaces())
+            self.assertFalse(interface_exists(vrf))
 
     def test_vrf_vni_and_table_id(self):
         base_table = '1000'
@@ -86,7 +89,7 @@ class VRFTest(VyOSUnitTestSHIM.TestCase):
         iproute2_config = read_file('/etc/iproute2/rt_tables.d/vyos-vrf.conf')
         for vrf in vrfs:
             description = f'VyOS-VRF-{vrf}'
-            self.assertTrue(vrf in interfaces())
+            self.assertTrue(interface_exists(vrf))
             vrf_if = Interface(vrf)
             # validate proper interface description
             self.assertEqual(vrf_if.get_alias(), description)
@@ -128,10 +131,11 @@ class VRFTest(VyOSUnitTestSHIM.TestCase):
         loopbacks = ['127.0.0.1', '::1']
         for vrf in vrfs:
             # Ensure VRF was created
-            self.assertIn(vrf, interfaces())
+            self.assertTrue(interface_exists(vrf))
             # Verify IP forwarding is 1 (enabled)
-            self.assertEqual(read_file(f'/proc/sys/net/ipv4/conf/{vrf}/forwarding'), '1')
-            self.assertEqual(read_file(f'/proc/sys/net/ipv6/conf/{vrf}/forwarding'), '1')
+            self.assertEqual(sysctl_read(f'net.ipv4.conf.{vrf}.forwarding'), '1')
+            self.assertEqual(sysctl_read(f'net.ipv6.conf.{vrf}.forwarding'), '1')
+
             # Test for proper loopback IP assignment
             for addr in loopbacks:
                 self.assertTrue(is_intf_addr_assigned(vrf, addr))
@@ -149,10 +153,11 @@ class VRFTest(VyOSUnitTestSHIM.TestCase):
         self.cli_commit()
 
         # Verify VRF configuration
-        tmp = read_file('/proc/sys/net/ipv4/tcp_l3mdev_accept')
-        self.assertIn(tmp, '1')
-        tmp = read_file('/proc/sys/net/ipv4/udp_l3mdev_accept')
-        self.assertIn(tmp, '1')
+        self.assertEqual(sysctl_read('net.ipv4.tcp_l3mdev_accept'), '1')
+        self.assertEqual(sysctl_read('net.ipv4.udp_l3mdev_accept'), '1')
+
+        # If there is any VRF defined, strict_mode should be on
+        self.assertEqual(sysctl_read('net.vrf.strict_mode'), '1')
 
     def test_vrf_table_id_is_unalterable(self):
         # Linux Kernel prohibits the change of a VRF table  on the fly.
@@ -166,7 +171,7 @@ class VRFTest(VyOSUnitTestSHIM.TestCase):
         self.cli_commit()
 
         # Check if VRF has been created
-        self.assertTrue(vrf in interfaces())
+        self.assertTrue(interface_exists(vrf))
 
         table = str(int(table) + 1)
         self.cli_set(base + ['table', table])
@@ -223,7 +228,7 @@ class VRFTest(VyOSUnitTestSHIM.TestCase):
             next_hop = f'192.0.{table}.1'
             prefix = f'10.0.{table}.0/24'
 
-            self.assertTrue(vrf in interfaces())
+            self.assertTrue(interface_exists(vrf))
 
             frrconfig = self.getFRRconfig(f'vrf {vrf}')
             self.assertIn(f' vni {table}', frrconfig)
@@ -256,7 +261,7 @@ class VRFTest(VyOSUnitTestSHIM.TestCase):
         # Apply VRF config
         self.cli_commit()
         # Ensure VRF got created
-        self.assertIn(vrf, interfaces())
+        self.assertTrue(interface_exists(vrf))
         # ... and IP addresses are still assigned
         for address in addresses:
             self.assertTrue(is_intf_addr_assigned(interface, address))
@@ -288,10 +293,10 @@ class VRFTest(VyOSUnitTestSHIM.TestCase):
         loopbacks = ['127.0.0.1', '::1']
         for vrf in vrfs:
             # Ensure VRF was created
-            self.assertIn(vrf, interfaces())
+            self.assertTrue(interface_exists(vrf))
             # Verify IP forwarding is 0 (disabled)
-            self.assertEqual(read_file(f'/proc/sys/net/ipv4/conf/{vrf}/forwarding'), '0')
-            self.assertEqual(read_file(f'/proc/sys/net/ipv6/conf/{vrf}/forwarding'), '0')
+            self.assertEqual(sysctl_read(f'net.ipv4.conf.{vrf}.forwarding'), '0')
+            self.assertEqual(sysctl_read(f'net.ipv6.conf.{vrf}.forwarding'), '0')
 
     def test_vrf_ip_protocol_route_map(self):
         table = '6000'
@@ -420,7 +425,7 @@ class VRFTest(VyOSUnitTestSHIM.TestCase):
         # Verify VRF configuration
         table = base_table
         for vrf in vrfs:
-            self.assertTrue(vrf in interfaces())
+            self.assertTrue(interface_exists(vrf))
 
             frrconfig = self.getFRRconfig(f'vrf {vrf}')
             self.assertIn(f' vni {table}', frrconfig)
@@ -442,7 +447,7 @@ class VRFTest(VyOSUnitTestSHIM.TestCase):
         # Verify VRF configuration
         table = base_table
         for vrf in vrfs:
-            self.assertTrue(vrf in interfaces())
+            self.assertTrue(interface_exists(vrf))
 
             frrconfig = self.getFRRconfig(f'vrf {vrf}')
             self.assertIn(f' vni {table}', frrconfig)
@@ -465,12 +470,38 @@ class VRFTest(VyOSUnitTestSHIM.TestCase):
         # Verify VRF configuration
         table = base_table
         for vrf in vrfs:
-            self.assertTrue(vrf in interfaces())
+            self.assertTrue(interface_exists(vrf))
 
             frrconfig = self.getFRRconfig(f'vrf {vrf}')
             self.assertIn(f' vni {table}', frrconfig)
             # Increment table ID for the next run
             table = str(int(table) + 2)
+
+
+        # add a new VRF with VNI - this must not delete any existing VRF/VNI
+        purple = 'purple'
+        table = str(int(table) + 10)
+        self.cli_set(base_path + ['name', purple, 'table', table])
+        self.cli_set(base_path + ['name', purple, 'vni', table])
+
+        # commit changes
+        self.cli_commit()
+
+        # Verify VRF configuration
+        table = base_table
+        for vrf in vrfs:
+            self.assertTrue(interface_exists(vrf))
+
+            frrconfig = self.getFRRconfig(f'vrf {vrf}')
+            self.assertIn(f' vni {table}', frrconfig)
+            # Increment table ID for the next run
+            table = str(int(table) + 2)
+
+        # Verify purple VRF/VNI
+        self.assertTrue(interface_exists(purple))
+        table = str(int(table) + 10)
+        frrconfig = self.getFRRconfig(f'vrf {purple}')
+        self.assertIn(f' vni {table}', frrconfig)
 
         # Now delete all the VNIs
         for vrf in vrfs:
@@ -482,11 +513,72 @@ class VRFTest(VyOSUnitTestSHIM.TestCase):
 
         # Verify no VNI is defined
         for vrf in vrfs:
-            self.assertTrue(vrf in interfaces())
+            self.assertTrue(interface_exists(vrf))
 
             frrconfig = self.getFRRconfig(f'vrf {vrf}')
             self.assertNotIn('vni', frrconfig)
 
+        # Verify purple VNI remains
+        self.assertTrue(interface_exists(purple))
+        frrconfig = self.getFRRconfig(f'vrf {purple}')
+        self.assertIn(f' vni {table}', frrconfig)
+
+    def test_vrf_ip_ipv6_nht(self):
+        table = '6910'
+
+        for vrf in vrfs:
+            base = base_path + ['name', vrf]
+            self.cli_set(base + ['table', table])
+            self.cli_set(base + ['ip', 'nht', 'no-resolve-via-default'])
+            self.cli_set(base + ['ipv6', 'nht', 'no-resolve-via-default'])
+
+            table = str(int(table) + 1)
+
+        self.cli_commit()
+
+        # Verify route-map properly applied to FRR
+        for vrf in vrfs:
+            frrconfig = self.getFRRconfig(f'vrf {vrf}', daemon='zebra')
+            self.assertIn(f'vrf {vrf}', frrconfig)
+            self.assertIn(f' no ip nht resolve-via-default', frrconfig)
+            self.assertIn(f' no ipv6 nht resolve-via-default', frrconfig)
+
+        # Delete route-maps
+        for vrf in vrfs:
+            base = base_path + ['name', vrf]
+            self.cli_delete(base + ['ip'])
+            self.cli_delete(base + ['ipv6'])
+
+        self.cli_commit()
+
+        # Verify route-map properly is removed from FRR
+        for vrf in vrfs:
+            frrconfig = self.getFRRconfig(f'vrf {vrf}', daemon='zebra')
+            self.assertNotIn(f' no ip nht resolve-via-default', frrconfig)
+            self.assertNotIn(f' no ipv6 nht resolve-via-default', frrconfig)
+
+    def test_vrf_conntrack(self):
+        table = '1000'
+        nftables_rules = {
+            'vrf_zones_ct_in': ['ct original zone set iifname map @ct_iface_map'],
+            'vrf_zones_ct_out': ['ct original zone set oifname map @ct_iface_map']
+        }
+
+        self.cli_set(base_path + ['name', 'blue', 'table', table])
+        self.cli_commit()
+
+        # Conntrack rules should not be present
+        for chain, rule in nftables_rules.items():
+            self.verify_nftables_chain(rule, 'inet vrf_zones', chain, inverse=True)
+
+        self.cli_set(['nat'])
+        self.cli_commit()
+
+        # Conntrack rules should now be present
+        for chain, rule in nftables_rules.items():
+            self.verify_nftables_chain(rule, 'inet vrf_zones', chain, inverse=False)
+
+        self.cli_delete(['nat'])
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

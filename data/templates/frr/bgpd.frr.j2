@@ -76,7 +76,7 @@
  neighbor {{ neighbor }} password {{ config.password }}
 {% endif %}
 {% if config.path_attribute.discard is vyos_defined %}
- neighbor {{ neighbor }} path-attribute discard {{ config.path_attribute.discard }}
+ neighbor {{ neighbor }} path-attribute discard {{ config.path_attribute.discard | join(' ') }}
 {% endif %}
 {% if config.path_attribute.treat_as_withdraw is vyos_defined %}
  neighbor {{ neighbor }} path-attribute treat-as-withdraw {{ config.path_attribute.treat_as_withdraw }}
@@ -225,10 +225,10 @@
   neighbor {{ neighbor }} route-map {{ afi_config.route_map.import }} in
 {%         endif %}
 {%         if afi_config.prefix_list.export is vyos_defined %}
-  neighbor {{ neighbor }} prefix-list  {{ afi_config.prefix_list.export }} out
+  neighbor {{ neighbor }} prefix-list {{ afi_config.prefix_list.export }} out
 {%         endif %}
 {%         if afi_config.prefix_list.import is vyos_defined %}
-  neighbor {{ neighbor }} prefix-list  {{ afi_config.prefix_list.import }} in
+  neighbor {{ neighbor }} prefix-list {{ afi_config.prefix_list.import }} in
 {%         endif %}
 {%         if afi_config.soft_reconfiguration.inbound is vyos_defined %}
   neighbor {{ neighbor }} soft-reconfiguration inbound
@@ -237,10 +237,10 @@
   neighbor {{ neighbor }} unsuppress-map {{ afi_config.unsuppress_map }}
 {%         endif %}
 {%         if afi_config.disable_send_community.extended is vyos_defined %}
- no neighbor {{ neighbor }} send-community extended
+  no neighbor {{ neighbor }} send-community extended
 {%         endif %}
 {%         if afi_config.disable_send_community.standard is vyos_defined %}
- no neighbor {{ neighbor }} send-community standard
+  no neighbor {{ neighbor }} send-community standard
 {%         endif %}
   neighbor {{ neighbor }} activate
  exit-address-family
@@ -290,10 +290,7 @@ router bgp {{ system_as }} {{ 'vrf ' ~ vrf if vrf is vyos_defined }}
 {%         endif %}
 {%         if afi_config.aggregate_address is vyos_defined %}
 {%             for aggregate, aggregate_config in afi_config.aggregate_address.items() %}
-  aggregate-address {{ aggregate }}{{ ' as-set' if aggregate_config.as_set is vyos_defined }}{{ ' summary-only' if aggregate_config.summary_only is vyos_defined }}
-{%                 if aggregate_config.route_map is vyos_defined %}
-  aggregate-address {{ aggregate }} route-map {{ aggregate_config.route_map }}
-{%                 endif %}
+  aggregate-address {{ aggregate }} {{ 'as-set' if aggregate_config.as_set is vyos_defined }} {{ 'summary-only' if aggregate_config.summary_only is vyos_defined }} {{ 'route-map ' ~ aggregate_config.route_map if aggregate_config.route_map is vyos_defined }}
 {%             endfor %}
 {%         endif %}
 {%         if afi_config.maximum_paths.ebgp is vyos_defined %}
@@ -390,7 +387,7 @@ router bgp {{ system_as }} {{ 'vrf ' ~ vrf if vrf is vyos_defined }}
 {%         endif %}
 {%         if afi_config.ead_es_route_target.export is vyos_defined %}
 {%             for route_target in afi_config.ead_es_route_target.export %}
- ead-es-route-target export {{ route_target }}
+  ead-es-route-target export {{ route_target }}
 {%             endfor %}
 {%         endif %}
 {%         if afi_config.rt_auto_derive is vyos_defined %}
@@ -401,6 +398,12 @@ router bgp {{ system_as }} {{ 'vrf ' ~ vrf if vrf is vyos_defined }}
 {%         endif %}
 {%         if afi_config.flooding.head_end_replication is vyos_defined %}
   flooding head-end-replication
+{%         endif %}
+{%         if afi_config.mac_vrf.soo is vyos_defined %}
+  mac-vrf soo {{ afi_config.mac_vrf.soo }}
+{%         endif %}
+{%         if afi_config.nexthop.vpn.export is vyos_defined %}
+  nexthop vpn export {{ afi_config.nexthop.vpn.export }}
 {%         endif %}
 {%         if afi_config.rd.vpn.export is vyos_defined %}
   rd vpn export {{ afi_config.rd.vpn.export }}
@@ -436,6 +439,9 @@ router bgp {{ system_as }} {{ 'vrf ' ~ vrf if vrf is vyos_defined }}
 {%         if afi_config.route_map.vpn.import is vyos_defined %}
   route-map vpn import {{ afi_config.route_map.vpn.import }}
 {%         endif %}
+{%         if afi_config.sid.vpn.export is vyos_defined %}
+ sid vpn export {{ afi_config.sid.vpn.export }}
+{%         endif %}
 {%         if afi_config.vni is vyos_defined %}
 {%             for vni, vni_config in afi_config.vni.items() %}
   vni {{ vni }}
@@ -467,9 +473,42 @@ router bgp {{ system_as }} {{ 'vrf ' ~ vrf if vrf is vyos_defined }}
 {%             endfor %}
 {%         endif %}
  exit-address-family
+ !
 {%     endfor %}
 {% endif %}
  !
+{% if bmp is vyos_defined %}
+{%     if bmp.mirror_buffer_limit is vyos_defined %}
+ bmp mirror buffer-limit {{ bmp.mirror_buffer_limit }}
+ !
+{%     endif %}
+{%     if bmp.target is vyos_defined %}
+{%         for bmp, bmp_config in bmp.target.items() %}
+ bmp targets {{ bmp }}
+{%             if bmp_config.mirror is vyos_defined %}
+  bmp mirror
+{%             endif %}
+{%             if bmp_config.monitor is vyos_defined %}
+{%                 if bmp_config.monitor.ipv4_unicast.pre_policy is vyos_defined %}
+  bmp monitor ipv4 unicast pre-policy
+{%                 endif %}
+{%                 if bmp_config.monitor.ipv4_unicast.post_policy is vyos_defined %}
+  bmp monitor ipv4 unicast post-policy
+{%                 endif %}
+{%                 if bmp_config.monitor.ipv6_unicast.pre_policy is vyos_defined %}
+  bmp monitor ipv6 unicast pre-policy
+{%                 endif %}
+{%                 if bmp_config.monitor.ipv6_unicast.post_policy is vyos_defined %}
+  bmp monitor ipv6 unicast post-policy
+{%                 endif %}
+{%             endif %}
+{%             if bmp_config.address is vyos_defined %}
+  bmp connect {{ bmp_config.address }} port {{ bmp_config.port }} min-retry {{ bmp_config.min_retry }} max-retry {{ bmp_config.max_retry }}
+{%             endif %}
+{%         endfor %}
+ exit
+{%     endif %}
+{% endif %}
 {% if peer_group is vyos_defined %}
 {%     for peer, config in peer_group.items() %}
 {{ bgp_neighbor(peer, config, true) }}
@@ -491,6 +530,12 @@ router bgp {{ system_as }} {{ 'vrf ' ~ vrf if vrf is vyos_defined }}
  bgp listen range {{ prefix }} peer-group {{ options.peer_group }}
 {%         endif %}
 {%     endfor %}
+{% endif %}
+{% if parameters.allow_martian_nexthop is vyos_defined %}
+ bgp allow-martian-nexthop
+{% endif %}
+{% if parameters.disable_ebgp_connected_route_check is vyos_defined %}
+ bgp disable-ebgp-connected-route-check
 {% endif %}
 {% if parameters.always_compare_med is vyos_defined %}
  bgp always-compare-med
@@ -552,6 +597,12 @@ router bgp {{ system_as }} {{ 'vrf ' ~ vrf if vrf is vyos_defined }}
 {% if parameters.graceful_shutdown is vyos_defined %}
  bgp graceful-shutdown
 {% endif %}
+{% if parameters.no_hard_administrative_reset is vyos_defined %}
+ no bgp hard-administrative-reset
+{% endif %}
+{% if parameters.labeled_unicast is vyos_defined %}
+ bgp labeled-unicast {{ parameters.labeled_unicast }}
+{% endif %}
 {% if parameters.log_neighbor_changes is vyos_defined %}
  bgp log-neighbor-changes
 {% endif %}
@@ -587,6 +638,14 @@ bgp route-reflector allow-outbound-policy
 {% endif %}
 {% if parameters.tcp_keepalive.idle is vyos_defined and parameters.tcp_keepalive.interval is vyos_defined and parameters.tcp_keepalive.probes is vyos_defined %}
  bgp tcp-keepalive {{ parameters.tcp_keepalive.idle }} {{ parameters.tcp_keepalive.interval }} {{ parameters.tcp_keepalive.probes }}
+{% endif %}
+{% if srv6.locator is vyos_defined %}
+ segment-routing srv6
+  locator {{ srv6.locator }}
+ exit
+{% endif %}
+{% if sid.vpn.per_vrf.export is vyos_defined %}
+ sid vpn per-vrf export {{ sid.vpn.per_vrf.export }}
 {% endif %}
 {% if timers.keepalive is vyos_defined and timers.holdtime is vyos_defined %}
  timers bgp {{ timers.keepalive }} {{ timers.holdtime }}

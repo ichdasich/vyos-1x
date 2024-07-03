@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright (C) 2021 VyOS maintainers and contributors
+# Copyright (C) 2021-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -22,6 +22,7 @@ declare progname=${0##*/}
 declare action=$1; shift
 
 declare -x BOOTFILE=$vyatta_sysconfdir/config/config.boot
+declare -x DEFAULT_BOOTFILE=$vyatta_sysconfdir/config.boot.default
 
 # If vyos-config= boot option is present, use that file instead
 for x in $(cat /proc/cmdline); do
@@ -64,13 +65,83 @@ disabled () {
     grep -q -w no-vyos-$1 /proc/cmdline
 }
 
+# Load encrypted config volume
+mount_encrypted_config() {
+    persist_path=$(/opt/vyatta/sbin/vyos-persistpath)
+    if [ $? == 0 ]; then
+        if [ -e $persist_path/boot ]; then
+            image_name=$(cat /proc/cmdline | sed -e s+^.*vyos-union=/boot/++ | sed -e 's/ .*$//')
+
+            if [ -z "$image_name" ]; then
+                return
+            fi
+
+            if [ ! -f $persist_path/luks/$image_name ]; then
+                return
+            fi
+
+            vyos_tpm_key=$(python3 -c 'from vyos.tpm import read_tpm_key; print(read_tpm_key().decode())' 2>/dev/null)
+
+            if [ $? -ne 0 ]; then
+                echo "ERROR: Failed to fetch encryption key from TPM. Encrypted config volume has not been mounted"
+                echo "Use 'encryption load' to load volume with recovery key"
+                echo "or 'encryption disable' to decrypt volume with recovery key"
+                return
+            fi
+
+            echo $vyos_tpm_key | tr -d '\r\n' | cryptsetup open $persist_path/luks/$image_name vyos_config --key-file=-
+
+            if [ $? -ne 0 ]; then
+                echo "ERROR: Failed to decrypt config volume. Encrypted config volume has not been mounted"
+                echo "Use 'encryption load' to load volume with recovery key"
+                echo "or 'encryption disable' to decrypt volume with recovery key"
+                return
+            fi
+
+            mount /dev/mapper/vyos_config /config
+            mount /dev/mapper/vyos_config $vyatta_sysconfdir/config
+
+            echo "Mounted encrypted config volume"
+        fi
+    fi
+}
+
+unmount_encrypted_config() {
+    persist_path=$(/opt/vyatta/sbin/vyos-persistpath)
+    if [ $? == 0 ]; then
+        if [ -e $persist_path/boot ]; then
+            image_name=$(cat /proc/cmdline | sed -e s+^.*vyos-union=/boot/++ | sed -e 's/ .*$//')
+
+            if [ -z "$image_name" ]; then
+                return
+            fi
+
+            if [ ! -f $persist_path/luks/$image_name ]; then
+                return
+            fi
+
+            umount /config
+            umount $vyatta_sysconfdir/config
+
+            cryptsetup close vyos_config
+        fi
+    fi
+}
+
 # if necessary, provide initial config
 init_bootfile () {
+    # define and version default boot config if not present
+    if [ ! -r $DEFAULT_BOOTFILE ]; then
+        if [ -f $vyos_data_dir/config.boot.default ]; then
+            cp $vyos_data_dir/config.boot.default $DEFAULT_BOOTFILE
+            $vyos_libexec_dir/add-system-version.py >> $DEFAULT_BOOTFILE
+        fi
+    fi
     if [ ! -r $BOOTFILE ] ; then
-        if [ -f $vyatta_sysconfdir/config.boot.default ]; then
-            cp $vyatta_sysconfdir/config.boot.default $BOOTFILE
+        if [ -f $DEFAULT_BOOTFILE ]; then
+            cp $DEFAULT_BOOTFILE $BOOTFILE
         else
-            $vyos_libexec_dir/system-versions-foot.py > $BOOTFILE
+            $vyos_libexec_dir/add-system-version.py > $BOOTFILE
         fi
         chgrp ${GROUP} $BOOTFILE
         chmod 660 $BOOTFILE
@@ -83,6 +154,15 @@ migrate_bootfile ()
     if [ -x $vyos_libexec_dir/run-config-migration.py ]; then
         log_progress_msg migrate
         sg ${GROUP} -c "$vyos_libexec_dir/run-config-migration.py $BOOTFILE"
+    fi
+}
+
+# configure system-specific settings
+system_config ()
+{
+    if [ -x $vyos_libexec_dir/run-config-activation.py ]; then
+        log_progress_msg system
+        sg ${GROUP} -c "$vyos_libexec_dir/run-config-activation.py $BOOTFILE"
     fi
 }
 
@@ -218,8 +298,8 @@ cleanup_post_commit_hooks () {
     # note that this approach only supports hooks that are "configured",
     # i.e., it does not support hooks that need to always be present.
     cpostdir=$(cli-shell-api getPostCommitHookDir)
-    # exclude commits hooks from vyatta-cfg
-    excluded="10vyatta-log-commit.pl 99vyos-user-postcommit-hooks"
+    # exclude commit hooks that need to always be present
+    excluded="00vyos-sync 10vyatta-log-commit.pl 99vyos-user-postcommit-hooks"
     if [ -d "$cpostdir" ]; then
 	    for f in $cpostdir/*; do
 	        if [[ ! $excluded =~ $(basename $f) ]]; then
@@ -260,6 +340,8 @@ EOF
     rm -f /etc/pam_radius_auth.conf
     pam-auth-update --disable tacplus-mandatory tacplus-optional
     rm -f /etc/tacplus_nss.conf /etc/tacplus_servers
+    # and no Google authenticator for 2FA/MFA
+    pam-auth-update --disable mfa-google-authenticator
 
     # Certain configuration files are re-generated by the configuration
     # subsystem and must reside under /etc and can not easily be moved to /run.
@@ -365,16 +447,16 @@ start ()
     nfct helper add rpc inet6 tcp
     nfct helper add rpc inet6 udp
     nfct helper add tns inet6 tcp
-    nft -f /usr/share/vyos/vyos-firewall-init.conf || log_failure_msg "could not initiate firewall rules"
+    nft --file /usr/share/vyos/vyos-firewall-init.conf || log_failure_msg "could not initiate firewall rules"
 
     # As VyOS does not execute commands that are not present in the CLI we call
     # the script by hand to have a single source for the login banner and MOTD
     ${vyos_conf_scripts_dir}/system_console.py || log_failure_msg "could not reset serial console"
-    ${vyos_conf_scripts_dir}/system-login-banner.py || log_failure_msg "could not reset motd and issue files"
-    ${vyos_conf_scripts_dir}/system-option.py || log_failure_msg "could not reset system option files"
-    ${vyos_conf_scripts_dir}/system-ip.py || log_failure_msg "could not reset system IPv4 options"
-    ${vyos_conf_scripts_dir}/system-ipv6.py || log_failure_msg "could not reset system IPv6 options"
-    ${vyos_conf_scripts_dir}/conntrack.py || log_failure_msg "could not reset conntrack subsystem"
+    ${vyos_conf_scripts_dir}/system_login_banner.py || log_failure_msg "could not reset motd and issue files"
+    ${vyos_conf_scripts_dir}/system_option.py || log_failure_msg "could not reset system option files"
+    ${vyos_conf_scripts_dir}/system_ip.py || log_failure_msg "could not reset system IPv4 options"
+    ${vyos_conf_scripts_dir}/system_ipv6.py || log_failure_msg "could not reset system IPv6 options"
+    ${vyos_conf_scripts_dir}/system_conntrack.py || log_failure_msg "could not reset conntrack subsystem"
     ${vyos_conf_scripts_dir}/container.py || log_failure_msg "could not reset container subsystem"
 
     clear_or_override_config_files || log_failure_msg "could not reset config files"
@@ -386,6 +468,7 @@ start ()
         touch /tmp/vyos.ifconfig.debug
         touch /tmp/vyos.frr.debug
         touch /tmp/vyos.container.debug
+        touch /tmp/vyos.smoketest.debug
     fi
 
     log_action_begin_msg "Mounting VyOS Config"
@@ -399,6 +482,8 @@ start ()
     mount -o $tmpfs_opts -t tmpfs none ${vyatta_configdir} \
       && chgrp ${GROUP} ${vyatta_configdir}
     log_action_end_msg $?
+
+    mount_encrypted_config
 
     # T5239: early read of system hostname as this value is read-only once during
     # FRR initialisation
@@ -425,6 +510,8 @@ start ()
 
     update_interface_config
 
+    disabled system_config || system_config
+
     for s in ${subinit[@]} ; do
     if ! disabled $s; then
         log_progress_msg $s
@@ -446,6 +533,10 @@ start ()
     restore_if_missing_postconfig_script
 
     run_postconfig_scripts
+    tmp=$(${vyos_libexec_dir}/read-saved-value.py --path "protocols rpki cache")
+    if [[ ! -z "$tmp" ]]; then
+        vtysh -c "rpki start"
+    fi
 }
 
 stop()
@@ -464,6 +555,8 @@ stop()
     log_action_end_msg $?
 
     systemctl stop frr.service
+
+    unmount_encrypted_config
 }
 
 case "$action" in

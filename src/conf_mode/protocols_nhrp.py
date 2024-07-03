@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright (C) 2021-2023 VyOS maintainers and contributors
+# Copyright (C) 2021-2024 VyOS maintainers and contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 or later as
@@ -19,7 +19,6 @@ import os
 from vyos.config import Config
 from vyos.configdict import node_changed
 from vyos.template import render
-from vyos.utils.process import process_named_running
 from vyos.utils.process import run
 from vyos import ConfigError
 from vyos import airbag
@@ -37,7 +36,7 @@ def get_config(config=None):
 
     nhrp = conf.get_config_dict(base, key_mangling=('-', '_'),
                                 get_first_key=True, no_tag_node_value_mangle=True)
-    nhrp['del_tunnels'] = node_changed(conf, base + ['tunnel'], key_mangling=('-', '_'))
+    nhrp['del_tunnels'] = node_changed(conf, base + ['tunnel'])
 
     if not conf.exists(base):
         return nhrp
@@ -93,7 +92,7 @@ def generate(nhrp):
     return None
 
 def apply(nhrp):
-    nft_rc = run(f'nft -f {nhrp_nftables_conf}')
+    nft_rc = run(f'nft --file {nhrp_nftables_conf}')
     if nft_rc != 0:
         raise ConfigError('Failed to apply NHRP tunnel firewall rules')
 

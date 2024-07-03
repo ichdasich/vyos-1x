@@ -67,8 +67,7 @@ def get_config(config=None):
 
     # We have gathered the dict representation of the CLI, but there are default
     # options which we need to update into the dictionary retrived.
-    default_values = defaults(base)
-    munin_node = dict_merge(default_values, munin_node)
+    munin_node = conf.merge_defaults(munin_node, recursive=True)
     return munin_node
 
 def verify(munin_node):

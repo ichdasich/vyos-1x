@@ -9,6 +9,99 @@
         </properties>
         <children>
           #include <include/generic-disable-node.xml.i>
+          <leafNode name="dynamic-dns-update">
+            <properties>
+              <help>Dynamically update Domain Name System (RFC4702)</help>
+              <valueless/>
+            </properties>
+          </leafNode>
+          <leafNode name="dynamic-dns-update-ttl">
+            <properties>
+              <help>TTL for RFC4702 dynamic DNS updates</help>
+              <constraint>
+                <regex>[1-9][0-9]+</regex>
+              </constraint>
+            </properties>
+          </leafNode>
+          <leafNode name="dynamic-dns-update-domain">
+            <properties>
+              <help>Domain for RFC4702 dynamic DNS updates</help>
+               <constraint>
+                 <validator name="fqdn"/>
+               </constraint>
+               <constraintErrorMessage>Invalid domain name (RFC 1123 section 2).\nMay only contain letters, numbers and .-_</constraintErrorMessage>
+            </properties>
+          </leafNode>
+          <leafNode name="dynamic-dns-update-conflict-detection">
+            <properties>
+              <help>Enable conflict detection for RFC4702 dynamic DNS updates</help>
+              <constraint>
+                <regex>(on|off)</regex>
+              </constraint>
+            </properties>
+          </leafNode>
+          <tagNode name="ddns_tsig_key">
+            <properties>
+              <help>Name of tsig key</help>
+              <constraint>
+                <regex>[-_a-zA-Z0-9.]+</regex>
+              </constraint>
+              <constraintErrorMessage>Invalid key name. May only contain letters and numbers</constraintErrorMessage>
+            </properties>
+            <children>
+              <leafNode name="algorithm">
+                <properties>
+                  <help>tsig_key algorithm</help>
+                  <constraint>
+                    <regex>hmac-sha256</regex>
+                  </constraint>
+                </properties>
+              </leafNode>
+              <leafNode name="secret">
+                <properties>
+                  <help>tsig_key secret</help>
+                  <constraint>
+                    <regex>[[:ascii:]]{1,253}</regex>
+                  </constraint>
+                </properties>
+              </leafNode>
+            </children>
+          </tagNode>
+          <tagNode name="ddns_upd_domain">
+            <properties>
+              <help>Name of a ddns_upd_domain</help>
+              <constraint>
+                 <validator name="fqdn"/>
+              </constraint>
+               <constraintErrorMessage>Invalid domain name (RFC 1123 section 2).\nMay only contain letters, numbers and .-_</constraintErrorMessage>
+            </properties>
+            <children>
+              <leafNode name="key">
+                <properties>
+                  <help>tsig_key</help>
+                  <constraint>
+                    <regex>[-_a-zA-Z0-9.]+</regex>
+                  </constraint>
+                </properties>
+              </leafNode>
+              <leafNode name="primary">
+                <properties>
+                  <help>Primary DNS server</help>
+                  <valueHelp>
+                    <format>ipv4</format>
+                    <description>IPv4 address</description>
+                  </valueHelp>
+                  <valueHelp>
+                    <format>ipv6</format>
+                    <description>IPv6 address</description>
+                  </valueHelp>
+                  <constraint>
+                    <validator name="ip-address"/>
+                  </constraint>
+                </properties>
+              </leafNode>
+            </children>
+          </tagNode>
           <node name="global-parameters">
             <properties>
               <help>Global options sent to all clients</help>

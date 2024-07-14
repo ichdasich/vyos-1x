@@ -40,6 +40,13 @@ def chmod(path, bitmask):
         return
     os.chmod(path, bitmask)
 
+def chmod_400(path):
+    """ make file only readable by owner """
+    from stat import S_IRUSR
+
+    bitmask = S_IRUSR
+    chmod(path, bitmask)
+
 def chmod_600(path):
     """ make file only read/writable by owner """
     from stat import S_IRUSR, S_IWUSR

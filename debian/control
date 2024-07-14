@@ -33,6 +33,8 @@ Pre-Depends:
   libpam-tacplus [amd64],
   libpam-radius-auth [amd64]
 Depends:
+  munin-node,
+  munin-plugins-extra,
   ${python3:Depends} (>= 3.10),
   aardvark-dns,
   accel-ppp,

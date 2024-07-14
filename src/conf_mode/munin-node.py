@@ -27,11 +27,11 @@ from sys import exit
 from vyos.base import Warning
 from vyos.config import Config
 from vyos.configdict import dict_merge
-from vyos.configverify import verify_vrf
 from vyos.template import render
 from vyos.template import is_ipv4
 from vyos.util import call
 from vyos.util import chmod_400
+from vyos.util import chmod_755
 from vyos.validate import is_addr_assigned
 from vyos.xml import defaults
 from vyos import ConfigError
@@ -39,6 +39,8 @@ from vyos import airbag
 airbag.enable()
 
 config_file = r'/etc/munin/munin-node.conf'
+dhcpd3_conf_file = r'/etc/munin/plugin-conf.d/dhcpd3'
+bgp_stats_file = r'/opt/frr_routes_'
 plugin_path = r'/etc/munin/plugins/'
 systemd_override = r'/run/systemd/system/munin-node.service.d/10-override.conf'
 
@@ -79,7 +81,7 @@ def verify(munin_node):
 def generate(munin_node):
     # cleanup any available configuration file
     # files will be recreated on demand
-    for i in glob(config_file + '*') + glob(plugin_path + '*'):
+    for i in glob(config_file + '*') + glob(plugin_path + '*') + glob(dhcpd3_conf_file + '*'):
         os.unlink(i)
 
     if os.path.isfile(systemd_override):
@@ -90,6 +92,11 @@ def generate(munin_node):
         return None
 
     render(config_file, 'munin-node/munin-node.conf.j2', munin_node)
+    render(dhcpd3_conf_file, 'munin-node/dhcpd3.j2', munin_node)
+    if os.path.isfile(bgp_stats_file):
+        os.unlink(bgp_stats_file)
+    render(bgp_stats_file, 'munin-node/frr_routes_.j2', munin_node)
+    chmod_755(bgp_stats_file)
 
     # Create plugin symlinks
     os.symlink('/usr/share/munin/plugins/cpu','/etc/munin/plugins/cpu')
@@ -118,6 +125,22 @@ def generate(munin_node):
     os.symlink('/usr/share/munin/plugins/uptime','/etc/munin/plugins/uptime')
     os.symlink('/usr/share/munin/plugins/users','/etc/munin/plugins/users')
     os.symlink('/usr/share/munin/plugins/vmstat','/etc/munin/plugins/vmstat')
+    os.symlink('/usr/share/munin/plugins/meminfo','/etc/munin/plugins/meminfo')
+
+
+    os.symlink('/opt/frr_routes_','/etc/munin/plugins/frr_routes_ipv4_valid')
+#    os.symlink('/opt/frr_routes_','/etc/munin/plugins/frr_routes_ipv4_bestpath')
+#    os.symlink('/opt/frr_routes_','/etc/munin/plugins/frr_routes_ipv4_removed')
+    os.symlink('/opt/frr_routes_','/etc/munin/plugins/frr_routes_ipv4_sent')
+
+    os.symlink('/opt/frr_routes_','/etc/munin/plugins/frr_routes_ipv6_valid')
+#    os.symlink('/opt/frr_routes_','/etc/munin/plugins/frr_routes_ipv6_bestpath')
+#    os.symlink('/opt/frr_routes_','/etc/munin/plugins/frr_routes_ipv6_removed')
+    os.symlink('/opt/frr_routes_','/etc/munin/plugins/frr_routes_ipv6_sent')
+
+    if os.path.isfile('/run/dhcp-server/dhcpd.conf'):
+        os.symlink('/usr/share/munin/plugins/dhcpd3','/etc/munin/plugins/dhcpd3')
+
 
     for interface in interfaces():
         os.symlink('/usr/share/munin/plugins/if_','/etc/munin/plugins/if_'+interface)

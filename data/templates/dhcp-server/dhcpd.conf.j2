@@ -40,6 +40,7 @@ zone {{ domain_name }} {
         key {{ domain_config.key }};
 }
 {%     endfor %}
+{% endif %}
 
 option rfc3442-static-route code 121 = array of integer 8;
 option windows-static-route code 249 = array of integer 8;
@@ -63,20 +64,19 @@ class "ubnt" {
 {%     endfor %}
 
 {% endif %}
-{% if high_availability is vyos_defined %}
-# DHCP HA configuration
-{%     set split_value = '256' if high_availability.mode == 'active-passive' else '128' %}
-failover peer "{{ high_availability.name }}" {
-{%     if high_availability.status == 'primary' %}
+{% if failover is vyos_defined %}
+# DHCP failover configuration
+failover peer "{{ failover.name }}" {
+{%     if failover.status == 'primary' %}
     primary;
     mclt 1800;
-    split {{ split_value }};
-{%     elif high_availability.status == 'secondary' %}
+    split 128;
+{%     elif failover.status == 'secondary' %}
     secondary;
 {%     endif %}
-    address {{ high_availability.source_address }};
+    address {{ failover.source_address }};
     port 647;
-    peer address {{ high_availability.remote }};
+    peer address {{ failover.remote }};
     peer port 647;
     max-response-delay 30;
     max-unacked-updates 10;
@@ -238,7 +238,7 @@ shared-network {{ network }} {
         pool {
 {%                 endif %}
 {%                 if subnet_config.enable_failover is vyos_defined %}
-            failover peer "{{ high_availability.name }}";
+            failover peer "{{ failover.name }}";
             deny dynamic bootp clients;
 {%                 endif %}
 {%                 if subnet_config.range is vyos_defined %}

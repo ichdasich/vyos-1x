@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+
+import sys
+import os
+import requests
+
+def get_newest_release(url='https://mirror.as59645.net/iso/vyos_wybt/'):
+	data = requests.get(url).content.decode('utf-8').strip()
+	versions = []
+	for line in data.split('\n'):
+		if 'vyos' in line and 'href' in line and not 'Index' in line:
+			v = line.split('href="')[1].split('">')[0].replace('.iso','')
+			if 'generic' in v:
+				versions.append(v.replace('vyos-','').replace('-generic-amd64',''))
+	versions.sort()
+	return versions[-1]
+
+def get_installed():
+	f = open('/opt/vyatta/etc/version').read().strip()
+	return f.split(': ')[-1]
+
+current_release = get_newest_release()
+installed_release = get_installed()
+
+
+if current_release == installed_release:
+	print('OK: '+current_release+' is up to date!')
+	sys.exit(0)
+else:
+	print('WARNING: '+current_release+' is available, but '+installed_release+' installed!')
+	sys.exit(1)
+

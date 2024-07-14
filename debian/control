@@ -37,6 +37,7 @@ Depends:
   munin-node,
   munin-plugins-extra,
   smokeping,
+  monitoring-plugins,
   ${python3:Depends} (>= 3.10),
   aardvark-dns,
   accel-ppp,

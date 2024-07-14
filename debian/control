@@ -36,6 +36,7 @@ Depends:
   vim,
   munin-node,
   munin-plugins-extra,
+  smokeping,
   ${python3:Depends} (>= 3.10),
   aardvark-dns,
   accel-ppp,

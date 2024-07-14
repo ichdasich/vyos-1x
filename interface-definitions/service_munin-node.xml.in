@@ -1,0 +1,59 @@
+<?xml version="1.0"?>
+<!-- Smokeping client configuration -->
+<interfaceDefinition>
+  <node name="service">
+    <children>
+      <node name="munin-node" owner="${vyos_conf_scripts_dir}/munin-node.py">
+        <properties>
+          <help>Munin-node metric server</help>
+          <priority>990</priority>
+        </properties>
+        <children>
+         <leafNode name="munin-server">
+            <properties>
+              <help>Munin collector server address</help>
+              <valueHelp>
+                <format>ipv4</format>
+                <description>IP address of Munin server</description>
+              </valueHelp>
+              <valueHelp>
+                <format>ipv6</format>
+                <description>IPv6 address of Munin server</description>
+              </valueHelp>
+              <constraint>
+                <validator name="ipv4-address"/>
+                <validator name="ipv6-address"/>
+              </constraint>
+            </properties>
+            <defaultValue>127.0.0.1</defaultValue>
+          </leafNode>
+          #include <include/port-number.xml.i>
+        <leafNode name="listen-address">
+            <properties>
+              <help>Address munin listens on</help>
+              <valueHelp>
+                <format>ipv4</format>
+                <description>IP address</description>
+              </valueHelp>
+              <valueHelp>
+                <format>ipv6</format>
+                <description>IPv6 address</description>
+              </valueHelp>
+              <constraint>
+                <validator name="ipv4-address"/>
+                <validator name="ipv6-address"/>
+              </constraint>
+            </properties>
+            <defaultValue>127.0.0.1</defaultValue>
+          </leafNode>
+          <leafNode name="node-name">
+            <properties>
+              <help>Name for the client, defaults to hostname</help>
+            </properties>
+          </leafNode>
+          #include <include/interface/vrf.xml.i>
+        </children>
+      </node>
+    </children>
+  </node>
+</interfaceDefinition>

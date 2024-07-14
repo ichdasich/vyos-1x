@@ -34,6 +34,8 @@ Pre-Depends:
   libpam-radius-auth [amd64]
 Depends:
   vim,
+  munin-node,
+  munin-plugins-extra,
   ${python3:Depends} (>= 3.10),
   aardvark-dns,
   accel-ppp,

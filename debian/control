@@ -33,6 +33,7 @@ Pre-Depends:
   libpam-tacplus [amd64],
   libpam-radius-auth [amd64]
 Depends:
+  smokeping,
   ${python3:Depends} (>= 3.10),
   aardvark-dns,
   accel-ppp,

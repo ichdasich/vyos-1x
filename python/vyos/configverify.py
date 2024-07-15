@@ -491,12 +491,13 @@ def verify_pki_ca_certificate(config: dict, ca_name: str):
     if 'ca' not in config['pki']:
         raise ConfigError('PKI does not contain any CA certificates!')
 
-    if ca_name not in config['pki']['ca']:
-        raise ConfigError(f'CA Certificate "{ca_name}" not found in configuration!')
+    for ca_name_spec in ca_name.split(','):
+        if ca_name_spec not in config['pki']['ca']:
+            raise ConfigError(f'CA Certificate "{ca_name_spec}" not found in configuration!')
 
-    pki_cert = config['pki']['ca'][ca_name]
-    if 'certificate' not in pki_cert:
-        raise ConfigError(f'PEM CA certificate for "{cert_name}" missing in configuration!')
+        pki_cert = config['pki']['ca'][ca_name_spec]
+        if 'certificate' not in pki_cert:
+            raise ConfigError(f'PEM CA certificate for "{cert_name_spec}" missing in configuration!')
 
 def verify_pki_dh_parameters(config: dict, dh_name: str, min_key_size: int=0):
     """

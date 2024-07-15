@@ -4,7 +4,11 @@
 
 # Local host
 127.0.0.1       localhost
+{% if domain_name %}
+127.0.1.1       {{ host_name }}.{{ domain_name }}
+{% else %}
 127.0.1.1       {{ host_name }}
+{% endif %}
 
 # The following lines are desirable for IPv6 capable hosts
 ::1             localhost ip6-localhost ip6-loopback

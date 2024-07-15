@@ -165,8 +165,9 @@ def generate(https):
 
         # Append CA certificate if specified to form a full chain
         if 'ca_certificate' in https['certificates']:
-            ca_cert = https['certificates']['ca_certificate']
-            server_cert += '\n' + str(wrap_certificate(https['pki']['ca'][ca_cert]['certificate']))
+            ca_certs = https['certificates']['ca_certificate'].split(',')
+            for ca_cert in ca_certs:
+                server_cert += '\n' + str(wrap_certificate(https['pki']['ca'][ca_cert]['certificate']))
 
         write_file(cert_path, server_cert, user=user, group=group, mode=0o644)
         write_file(key_path, wrap_private_key(pki_cert['private']['key']),
